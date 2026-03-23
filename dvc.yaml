@@ -1,0 +1,10 @@
+stages:
+  make_uniflows:
+    cmd: python data_processing/data_pipeline.py
+    deps:
+      - context_based_anomalous_flow_detector/paths.py
+      - data_processing/preprocess_data.py
+      - data_processing/data_pipeline.py
+      - data/raw/f7546561558c07c5_NFV3DATA-A11964_A11964/data/NF-UNSW-NB15-v3.csv
+    outs:
+      - data/processed/uniflows_v1.csv

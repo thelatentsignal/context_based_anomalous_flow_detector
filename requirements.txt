@@ -1,24 +1,25 @@
 
 # Tells PyCharm/Pip where to find the RTX 5090 binaries
 --extra-index-url https://download.pytorch.org/whl/nightly/cu128
-
 # Core AI stack
 torch
 torchvision
 torchaudio
-
 # Data Processing
 pandas
 numpy
 scikit-learn
 tqdm
-#matplotlib
-#numpy
-#pandas
+dvc
+sf-hamilton
+matplotlib
+numpy
+pandas
+loguru
 #pip
 #ruff
 #scikit-learn
-#-e .
+-e .
 #torch
 #pytest
 #
