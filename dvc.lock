@@ -1,0 +1,27 @@
+schema: '2.0'
+stages:
+  make_uniflows:
+    cmd: python data_processing/data_pipeline.py
+    deps:
+    - path: context_based_anomalous_flow_detector/paths.py
+      hash: md5
+      md5: d1e9bf2777d4edebe4c69ba735beeb28
+      size: 539
+    - path: 
+        data/raw/f7546561558c07c5_NFV3DATA-A11964_A11964/data/NF-UNSW-NB15-v3.csv
+      hash: md5
+      md5: 9078329ea6d49b591e4636a24cc99f1a
+      size: 577360958
+    - path: data_processing/data_pipeline.py
+      hash: md5
+      md5: 9b7318f71e48de546c952f0e33d93371
+      size: 712
+    - path: data_processing/preprocess_data.py
+      hash: md5
+      md5: ae4d4ca9b91b48f20f590149ef517f31
+      size: 1618
+    outs:
+    - path: data/processed/uniflows_v1.csv
+      hash: md5
+      md5: a66a4e8df9fb5b7eea0fea666e84818d
+      size: 18172679
