@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="Black">
+    <option name="sdkName" value="context_based_anomalous_flow_detector" />
+  </component>
+  <component name="ProjectRootManager" version="2" project-jdk-name="context_based_anomalous_flow_detector" project-jdk-type="Python SDK" />
+</project>
