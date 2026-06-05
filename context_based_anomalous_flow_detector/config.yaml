@@ -1,0 +1,6 @@
+unsw_nb15:
+  raw_input: "../data/unsw_nb15/NF-UNSW-NB15-v3_raw.csv"
+  clean_output: "../data/unsw_nb15/NF-UNSW-NB15-v3_input_to_bert.csv"
+isolation_forest_unsw_nb15:
+  raw_input: "../data/unsw_nb15/NF-UNSW-NB15-v3_raw.csv"
+  clean_output: "../data/unsw_nb15/NF-UNSW-NB15-v3_input_to_isolation_forest.csv"

@@ -231,55 +231,6 @@ def train_step(
     optimizer.step()
     return loss.item()
 
-# --- 5. DATA INGESTION PIPELINE ---
-def get_training_data_bert(file_path: str | Path) -> pd.DataFrame:
-    path = Path(file_path).resolve()
-    if not path.exists():
-        raise FileNotFoundError(f"Die Datei wurde unter {path} nicht gefunden!")
-    data = pd.read_csv(path)
-
-    data = data.sort_values(by=["ipsrc", "starttime"]).reset_index(drop=True)
-    data["time_delta"] = data.groupby("ipsrc")["starttime"].diff().fillna(0)
-
-    # Scaling Transformations
-    data["bytes_in"] = np.log1p(data["bytes_in"].astype(np.float32)) / 20.0
-    data["bytes_out"] = np.log1p(data["bytes_out"].astype(np.float32)) / 20.0
-    data["packets_in"] = np.log1p(data["packets_in"].astype(np.float32)) / 12.0
-    data["packets_out"] = np.log1p(data["packets_out"].astype(np.float32)) / 12.0
-    data["duration"] = np.log1p(data["duration"].astype(np.float32)) / 12.0
-    data["time_delta"] = np.log1p(data["time_delta"].astype(np.float32)) / 15.0
-    data["ttl"] = data["ttl"].astype(np.float32) / 255.0
-
-    # Flag Bitmask Parsing
-    flags_series = data["tcpflags"].fillna(0).astype(np.int64)
-    data["tcp_fin"] = ((flags_series & 1) > 0).astype(np.float32)
-    data["tcp_syn"] = ((flags_series & 2) > 0).astype(np.float32)
-    data["tcp_rst"] = ((flags_series & 4) > 0).astype(np.float32)
-    data["tcp_psh"] = ((flags_series & 8) > 0).astype(np.float32)
-    data["tcp_ack"] = ((flags_series & 16) > 0).astype(np.float32)
-    data["tcp_urg"] = ((flags_series & 32) > 0).astype(np.float32)
-
-    data["portdst"] = data["portdst"].fillna(0).astype(np.int64)
-    data["proto"] = data["proto"].fillna(0).astype(np.int64)
-
-    feature_order = [
-        "bytes_in",
-        "bytes_out",
-        "packets_in",
-        "packets_out",
-        "ttl",
-        "duration",
-        "time_delta",
-        "tcp_fin",
-        "tcp_syn",
-        "tcp_rst",
-        "tcp_psh",
-        "tcp_ack",
-        "tcp_urg",
-        "portdst",
-        "proto",
-    ]
-    return data[feature_order]
 
 
 def create_sequences(data: pd.DataFrame, seq_len: int = 34) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
