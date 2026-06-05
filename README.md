@@ -12,6 +12,13 @@ So - I will start with SINGLE Flows and learn a cls token for a single flow. Thi
 able to detect software that is wrong, e.g. flows where an unusual port is used together with
 a certain ip or protocol etc.
 
+# Installation Instructions
+2. **Clone the repository:**
+1) clone repos
+2) create new conda env and activate it
+3) pip install -e .
+4) in the empty data folder download the nf-unswb-nb15-v3 dataset and place the file
+NF-UNSW-NB15-v3.csv directly into data. Rename to NF-UNSW-NB15-v3_raw.csv
 
 
 # Context_Based_Anomalous_Flow_Detector
