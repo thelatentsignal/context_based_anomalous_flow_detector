@@ -7,7 +7,7 @@ name = "context_based_anomalous_flow_detector"
 version = "0.0.1"
 description = "Test if batches of anomalouse flows can be detected using a Bert-style approach."
 authors = [
-  { name = "Your name (or your organization/company/team)" },
+  { name = "Markelic" },
 ]
 license = { file = "LICENSE" }
 readme = "README.md"
@@ -30,3 +30,17 @@ extend-select = ["I"]  # Add import sorting
 known-first-party = ["context_based_anomalous_flow_detector"]
 force-sort-within-sections = true
 
+dependencies = [
+ "pyyaml",
+ "torch",
+ "pandas",
+ "numpy",
+ "scikit-learn",
+ "tqdm",
+ "dvc",
+ "sf-hamilton",
+ "matplotlib",
+ "numpy",
+ "pandas",
+ "loguru",
+]
