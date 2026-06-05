@@ -1,5 +1,9 @@
 # Data
-/data/
+# Ignore everything inside the data directory
+data/**/*
+
+# Except for .gitkeep files, which force Git to track the folders
+!data/**/.gitkeep
 
 # Mac OS-specific storage files
 .DS_Store
