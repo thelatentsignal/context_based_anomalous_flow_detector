@@ -3,10 +3,13 @@ import pandas as pd
 from pathlib import Path
 import torch
 import torch.nn as nn
+from IPython.lib.pretty import MAX_SEQ_LENGTH
 from torch.utils.data import TensorDataset, DataLoader
 from datetime import datetime
 import sys
-
+from importlib.resources import files
+import yaml
+from context_based_anomalous_flow_detector.utils import load_config, get_dataset_params
 
 # --- 1. DUMMY DATA GEN (FOR QUICK RUNTIME TESTING) ---
 def create_dummy_data() -> torch.Tensor:
@@ -311,22 +314,40 @@ def verify_and_load_model(
 
 # --- 6. EXECUTION RUNNER ---
 if __name__ == "__main__":
+    # data_dir = Path(params["processed_data_dir"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using hardware accelerator device: {device}")
-    file_path = "/home/irene/DataSSD/Code/context_based_anomalous_flow_detector/data/unsw_nb15/NF-UNSW-NB15-v3_input_to_bert.csv"
-    SEQ_LEN = 34
+
+    # get the config params from the config path, just put root of project as configured in pyproject.toml
+    #config_path = files("context_based_anomalous_flow_detector") / "config.yaml"
+    #with open(config_path, "r") as file:
+    #   config = yaml.safe_load(file)
+    #dataset_id = "unsw_nb15"
+
+    # get the config and read all params from the according section:
+    config = load_config()
+    # 2. Extract specific hyperparameters from their respective YAML parent blocks
+
+    #file_path = "context_based_anomalous_flow_detector/data/unsw_nb15/NF-UNSW-NB15-v3_input_to_bert.csv"
+    SEQ_LEN = config["data"]["seq_len"]  # Lives under 'data'
+    D_MODEL = config["model"]["d_model"]  # Lives under 'model'
+    NHEAD = config["model"]["nhead"]  # Lives under 'model'
+    NUM_LAYERS = config["model"]["num_layers"]  # Lives under 'model'
+
+    # Note: Add these keys to your config.yaml under 'model' or 'data' if not already present:
+    BATCH_SIZE = config["model"].get("batch_size", 64)  # Fallback to 64 if missing
+    EPOCHS = config["model"].get("epochs", 20)  # Fallback to 20 if missing
+    LR = config["model"].get("lr", 0.001)  # Fallback to 20 if missing
+
+    # Your continuous features (13) + categorical inputs (2) = 15 total features
     INPUT_DIM = 15
-    D_MODEL = 32
-    NHEAD = 4
-    NUM_LAYERS = 2
-    MAX_SEQ_LEN = 34
-    BATCH_SIZE = 64
+
 
     # Execution Fallback logic for sandbox vs local test environments
     if Path(file_path).exists():
         print("Loading real NetFlow processing dataframe...")
         df = get_training_data_bert(file_path)
-        bert_input = create_sequences(df, seq_len=SEQ_LEN)
+        bert_input = create_sequences(df, seq_len=config[dataset_id]["seq_len"])
     else:
         print(
             "File target path unavailable. Exiting." #Injecting safe 15-dim structural Dummy Tensors..."
@@ -339,15 +360,16 @@ if __name__ == "__main__":
     dataset = TensorDataset(*bert_input)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
 
-    model = MiniBert(input_dim=INPUT_DIM, d_model=D_MODEL, nhead=NHEAD, num_layers=NUM_LAYERS, max_seq_len=MAX_SEQ_LEN)
+    model = MiniBert(input_dim=INPUT_DIM, d_model=D_MODEL, nhead=NHEAD,
+                      num_layers=NUM_LAYERS,  max_seq_len=MAX_SEQ_LENGTH)
     model = model.to(device)  # <-- Push weights to GPU VRAM
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     criterion = (nn.MSELoss(), nn.CrossEntropyLoss())
 
-    EPOCHS = 20
+    #EPOCHS = 20
     model.train()
-    for epoch in range(EPOCHS):
+    for epoch in range(config[dataset_id]['epochs']):
         total_loss = 0.0
         for batch_idx, batch in enumerate(dataloader):
             loss_val = train_step(model, batch, optimizer, criterion)
@@ -370,7 +392,6 @@ if __name__ == "__main__":
     loaded_model = verify_and_load_model(saved_model, MiniBert)
     loaded_model = loaded_model.to(device)
     # 2. Mimicking your real separated data stream typesggvG
-    batch_size, seq_len = 64, 34
 
     simulated_cont  = torch.randn(batch_size, seq_len, 13).to(device)            # Floats
     simulated_ports = torch.randint(0, 65535, (batch_size, seq_len)).to(device)  # Longs
@@ -383,7 +404,7 @@ if __name__ == "__main__":
     print("Continuous Features Out Shape: ", out_cont.shape)  # Expected: [64, 34, 13]
     print("Port Logits Out Shape:          ", out_port.shape)  # Expected: [64, 34, 65537]
     print("Protocol Logits Out Shape:      ", out_proto.shape)  # Expected: [64, 34, 257]
-#todo mach eine quantisierung über die Ports anstatt jeden einzelnen vorhersagen zu wollen
+# todo mach eine quantisierung über die Ports anstatt jeden einzelnen vorhersagen zu wollen
 # todo: 3. Effizientere Token-Maskierung (Die 80-10-10-Regel)
 # Aktuell ersetzt du jeden ausgewählten Flow starr zu 100% mit den Maskierungs-Tokens (0.0, 256, 65536). Das entspricht dem Ur-BERT-Paper, führt aber dazu, dass das Modell bei der echten Inferenz (ohne Masken) eine Diskrepanz sieht.
 #

@@ -3,13 +3,16 @@ import yaml
 from pathlib import Path
 import torch
 import numpy as np
+import os
 from hamilton import driver, base
 from hamilton.function_modifiers import tag
 # __file__ ist der absolute Pfad zu dieser .py Datei
 # .parent ist der Ordner 'data_processing'
 # .parent.parent ist der Root des Pakets
-PACKAGE_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = PACKAGE_ROOT / "context_based_anomalous_flow_detector" / "config.yaml"
+#PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+#CONFIG_PATH = PACKAGE_ROOT / "context_based_anomalous_flow_detector" / "config.yaml"
+from context_based_anomalous_flow_detector.utils import load_config, get_dataset_params
+
 
 # diese Date ist zweigeteilt. Erst die Transformationen und unten kommt der Hamilton driver
 
@@ -37,7 +40,7 @@ def uniflows(raw_data: pd.DataFrame) -> pd.DataFrame:
         "FLOW_START_MILLISECONDS",
         "PROTOCOL",
     ]
-    res_df = raw_data[cols]
+    res_df = raw_data[cols].copy()
     res_df.rename(
         columns={
             "OUT_BYTES": "bytes_out",
@@ -60,19 +63,24 @@ def uniflows(raw_data: pd.DataFrame) -> pd.DataFrame:
     print("res_df: ", res_df)
     return res_df
 
-    ################ 2. Feature Engineering & Skalierung ################################
-    # --- 5. DATA INGESTION PIPELINE ---
-    # def get_training_data_bert(file_path: str | Path) -> pd.DataFrame:
+################ 2. Feature Engineering & Skalierung ################################
 
-def sorted_flows(uniflows: pd.DataFrame) -> pd.DataFrame:
-    """Sortiert chronologisch nach IP und Zeit, um Zeitabstände korrekt zu berechnen."""
-    return uniflows.sort_values(by=["ipsrc", "starttime"]).reset_index(drop=True)
+def sorted_flows(
+    uniflows: pd.DataFrame,
+    group_cols: list[str],
+    time_col: str,
+) -> pd.DataFrame:
+    return uniflows.sort_values(by=group_cols + [time_col]).reset_index(drop=True)
 
-def featurized_data(sorted_flows: pd.DataFrame) -> pd.DataFrame:
+def featurized_data(
+        sorted_flows: pd.DataFrame,
+        group_cols: list[str],
+        time_col:str,
+) -> pd.DataFrame:
     data = sorted_flows.copy()
 
     # compute time differences
-    data["time_delta"] = data.groupby("ipsrc")["starttime"].diff().fillna(0)
+    data["time_delta"] = data.groupby(group_cols)[time_col].diff().fillna(0)
 
     # Scaling Transformations
     data["bytes_in"] = np.log1p(data["bytes_in"].astype(np.float32)) / 20.0
@@ -116,29 +124,142 @@ def featurized_data(sorted_flows: pd.DataFrame) -> pd.DataFrame:
     #return data[feature_order]
 
 ################ 3. Train / Eval / Test Splits & Sequenz-Generierung ################
-def _build_tensors(df_slice: pd.DataFrame, seq_len: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Interne Hilfsfunktion, um Dataframe-Abschnitte in 3D/2D Tensors zu schneiden."""
-    num_sequences = len(df_slice) // seq_len
+def _build_tensors(
+        df_slice: pd.DataFrame,
+        group_cols: list[str],
+        time_col: str,
+        seq_len: int) ->tuple[torch.tensor, torch.tensor, torch.tensor, torch.tensor]:
+        # cont_seqs dim:(n_full, seq_len, num features)
+        # proto_seqs dim:(n_full, seq_len, num features)
+        # port_seqs dim:(n_full, seq_len, num features)
+        # attention_mask dim:(n_full, seq_len, num features)
+
+    """ df_slice is one large pandas dataframe. In this function I subdivide everything into
+    packets of seq_len. I do this separately for the continuous features, and the categorical ones (port and proto).
+
+    Every such seq_len will be fed into the bert model. It constitutes one "sentence". Now, I only want "words" from
+    ONE IP in one such sentence. But when I cut this dataframe into equal slices of seq_len it may happen that
+    one sentence will have mixed IPs, e.g. if my rows have these IPs AAAAAAABBB and my seq_len is 5 I would split this
+    into AAAAA AABBB. I do not want AABBB. Thus, what I do in this function is to make sure that AABBB gets
+    split into AAXXX, where the XXX is a padding and the BBB get their own packet.
+    I also need to inform the model about the padding, thus I also create a mask which is 1 where I pad and 0 else.
+    """
+
+    # containers for the groups of size seq_len for the continuous features, proto, port, and mask
+    all_cont = []
+    all_proto = []
+    all_port = []
+    all_attention_mask = []
+
 
     # 13 kontinuierliche Features extrahieren
     cont_cols = ["bytes_in", "bytes_out", "packets_in", "packets_out", "ttl",
                  "duration", "time_delta", "tcp_fin", "tcp_syn", "tcp_rst",
                  "tcp_psh", "tcp_ack", "tcp_urg"]
 
-    cont_np = df_slice[cont_cols].iloc[:num_sequences * seq_len].values.astype(np.float32)
-    cont_seqs = torch.from_numpy(cont_np.reshape((num_sequences, seq_len, 13)))
+    # first I group by the group_cols, initially that was only ip_src, but using a parameter makes this more
+    # flexible, I can easily change this to more parameters, e.g. ip_src, ip_dest, in config.yaml.
 
-    # Kategoriale Features extrahieren (2D Tensors)
-    port_np = df_slice["portdst"].iloc[:num_sequences * seq_len].values.astype(np.int64)
-    port_seqs = torch.from_numpy(port_np.reshape((num_sequences, seq_len)))
+    # for each group I check if there is a group that is less than seq_len, that one must be masked
+    for group_key, group_df in df_slice.groupby(group_cols):
+        # does this group have enough flows?
+        n = len(group_df)
+        n_full = n // seq_len
+        full_rows = n_full * seq_len
+        left_overs = n % seq_len
 
-    proto_np = df_slice["proto"].iloc[:num_sequences * seq_len].values.astype(np.int64)
-    proto_seqs = torch.from_numpy(proto_np.reshape((num_sequences, seq_len)))
+        # The easy part. Just create tensors for these because these rows contain only one ipsrc
+        # (or whatever group_cols looks for)
+        if n_full > 0:
+            full_df = group_df.iloc[:full_rows]
 
-    return cont_seqs, proto_seqs, port_seqs
+            # continuous features
+            cont_df = full_df[cont_cols].values.astype(np.float32)
+            cont_tensor = torch.from_numpy(
+                cont_df.reshape(n_full, seq_len, len(cont_cols))
+            )
+            all_cont.append(cont_tensor)
 
+            # do this for proto and for port
+            # proto
+            proto_np = full_df["proto"].values.astype(np.int64)
+            proto_tensor = torch.from_numpy(
+                    proto_np.reshape(n_full, seq_len)
+            )
+            all_proto.append(proto_tensor)
 
-def final_tensor_splits(featurized_data: pd.DataFrame, seq_len: int = 34) -> dict[str, tuple]:
+            # port
+            port_np = full_df["portdst"].values.astype(np.int64)
+            port_tensor = torch.from_numpy(
+                port_np.reshape(n_full, seq_len)
+            )
+            all_port.append(port_tensor)
+
+            # create mask for the above
+            attention_mask = torch.zeros(
+                        (n_full, seq_len),
+                        dtype=torch.bool
+            )
+            all_attention_mask.append(attention_mask)
+
+        # now handle the left overs. They must be padded
+        if left_overs > 0:
+
+            leftover_df = group_df.iloc[full_rows:]
+            num_pads = seq_len - left_overs
+
+            # as padding values I use values that to not occur in the measured data
+            cont_pad = torch.full((seq_len, len(cont_cols)), -1.0, dtype=torch.float32)
+            proto_pad = torch.full((seq_len,), 256, dtype=torch.long)
+            port_pad = torch.full((seq_len,), 65536, dtype=torch.long)
+
+            # 2. PyTorch Transformer Convention:
+            # FALSE = Attend (Real Data) | TRUE = Ignore (Padding)
+            attention_mask = torch.full((seq_len,), True, dtype=torch.bool)
+
+            # 3. Extract the real data
+            real_cont = torch.from_numpy(leftover_df[cont_cols].values.astype(np.float32))
+            real_port = torch.from_numpy(leftover_df["portdst"].values.astype(np.int64))
+            real_proto = torch.from_numpy(leftover_df["proto"].values.astype(np.int64))
+
+            # 4. Put the real data on top of the padding to override it
+            cont_pad[:left_overs] = real_cont
+            proto_pad[:left_overs] = real_proto
+            port_pad[:left_overs] = real_port
+
+            # 5. Flip the mask to FALSE for the real data slots so the model reads them
+            attention_mask[:left_overs] = False
+
+            all_cont.append(cont_pad.unsqueeze(0))
+            all_proto.append(proto_pad.unsqueeze(0))
+            all_port.append(port_pad.unsqueeze(0))
+            all_attention_mask.append(attention_mask.unsqueeze(0))
+
+    cont_seqs = torch.cat(all_cont, dim=0)
+    proto_seqs = torch.cat(all_proto, dim=0)
+    port_seqs = torch.cat(all_port, dim=0)
+    attention_mask = torch.cat(all_attention_mask, dim=0)
+
+    return cont_seqs, proto_seqs, port_seqs, attention_mask
+
+def save_data_artifacts(splits: dict, config: dict, target_dir: Path) -> None:
+    """Handles the physical writing of the tensors and config snapshot to disk."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Save the PyTorch tensors
+    torch.save(splits, target_dir / "tensors.pt")
+
+    # 2. Save the frozen config snapshot
+    with open(target_dir / "data_config.yaml", "w") as f:
+        yaml.safe_dump(config, f)
+
+    print(f"Artifacts successfully frozen in: {target_dir}")
+
+def final_tensor_splits(
+        featurized_data: pd.DataFrame,
+        group_cols: list[str],     # <-- Hamilton injects this from config
+        time_col: str,             # <-- Hamilton injects this from config
+        seq_len: int = 34) -> dict[str, tuple]:
     """Führt den chronologischen Split durch und baut die PyTorch-Tensors."""
     total_rows = len(featurized_data)
     train_end = int(total_rows * 0.70)
@@ -147,94 +268,54 @@ def final_tensor_splits(featurized_data: pd.DataFrame, seq_len: int = 34) -> dic
     df_train = featurized_data.iloc[:train_end]
     df_eval  = featurized_data.iloc[train_end:eval_end]
     df_test  = featurized_data.iloc[eval_end:]
-
+    #print(f'df_test: {df_test.head(4)}')
+    #print('hallloooooooooooooooooooooooooooooooo')
     return {
-        "train": _build_tensors(df_train, seq_len),
-        "eval":  _build_tensors(df_eval, seq_len),
-        "test":  _build_tensors(df_test, seq_len)
+        "train": _build_tensors(df_train, group_cols, time_col, seq_len),
+        "eval":  _build_tensors(df_eval, group_cols, time_col, seq_len),
+        "test":  _build_tensors(df_test, group_cols, time_col, seq_len)
     }
 
 ################ 4. Hamilton Execution Driver ########################################
 
 def create_bert_input() -> None:
-    if not CONFIG_PATH.exists():
-        raise FileNotFoundError(f"Config nicht gefunden unter: {CONFIG_PATH}")
 
-    with open(CONFIG_PATH, "r") as f:
-        config = yaml.safe_load(f)
+    # reads in the config,
+    # sets up the driver
+    # creates the data
+    # calls functio to save data
 
-    params = config["unsw_nb15"]
-    # Wir fügen den Standard-Wert für seq_len zu den Parametern hinzu
-    params["seq_len"] = 34
+    # get config
+    params = get_dataset_params(dataset_id='unsw_nb15')
+    #if not CONFIG_PATH.exists():
+    #    raise FileNotFoundError(f"Config nicht gefunden unter: {CONFIG_PATH}")
 
-    # Hamilton nutzt das aktuelle Skript als Modul
+    #with open(CONFIG_PATH, "r") as f:
+    #config = yaml.safe_load(f)
+    config = load_config()
+
+    #params = config["unsw_nb15"]
+
+    # set up driver
+    # This module is imported here, because it is ONLY needed here for
+    # dependency injection when instantiating the Hamilton driver
     import create_data_unsw_nb15
     dr = driver.Driver(params, create_data_unsw_nb15, adapter=base.DefaultAdapter())
 
-    # Wir fordern gezielt das Endergebnis 'final_tensor_splits' an
     print("Starte Hamilton Daten-Pipeline...")
     outputs = dr.execute(["final_tensor_splits"])
     splits = outputs["final_tensor_splits"]
 
-    # Artefakt sicher auf SSD speichern
-    output_path = Path(params["clean_output"]).with_suffix(".pt")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Artefakt speichern
+    # Delegate the saving to our engine function
+    output_dir = Path(params["processed_data_dir"])
+    save_data_artifacts(splits, config, output_dir)
 
-    torch.save(splits, output_path)
-    print(f"Pipeline erfolgreich! Splits als PyTorch-Artefakt gespeichert unter: {output_path}")
+    #output_path = Path(params["clean_output"]).with_suffix(".pt")
+    #output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    #torch.save(splits, output_path)
+    print(f"Pipeline erfolgreich! Splits als PyTorch-Artefakt gespeichert unter: {output_dir}")
 
 if __name__ == "__main__":
     create_bert_input()
-#
-#def bert_input_unsw_nb15(uniflows: pd.DataFrame)-> pd.DataFrame:
-#    uniflows = uniflows[["ipsrc", "ipdst", "proto", "tcpflags", "portsrc", "portdst","bytes_in", "bytes_out", "packets_in", "packets_out", "ttl", "duration", "starttime"]]
-#    # take this data and
-#    return uniflows
-#
-#
-#def numerical_values(uniflows: pd.DataFrame) -> pd.DataFrame:
-#    uniflows = uniflows[["bytes", "packets", "ttl", "duration"]]
-#    # take this data and
-#    return uniflows
-#
-## create_data_unsw_nb15.py
-#import pandas as pd
-#import torch
-#from torch.utils.data import DataLoader, TensorDataset
-#from sklearn.preprocessing import StandardScaler
-#
-#
-#def scaled_features(numerical_values: pd.DataFrame) -> pd.DataFrame:
-#    """Standardize features so the Linear layer treats them equally."""
-#    scaler = StandardScaler()
-#    # returns a numpy array
-#    scaled_array = scaler.fit_transform(numerical_values)
-#    return pd.DataFrame(
-#        scaled.array, index=numerical_values.index, columns=numerical_values.columns
-#    )
-#
-################# Hamilton Driver ########################################
-#@tag(target='internal')
-#def create_bert_input()->None:
-#    if not CONFIG_PATH.exists():
-#        raise FileNotFoundError(f"Config nicht gefunden unter: {CONFIG_PATH}")
-#    # 1. Pfade aus der YAML laden
-#    with open(CONFIG_PATH, "r") as f:
-#        config = yaml.safe_load(f)
-#
-#    # Hol dir nur den Teil für diesen speziellen Datensatz
-#    params = config["unsw_nb15"]
-#    # 2. Hamilton Driver konfigurieren
-#    # 'import __main__' referenziert die Funktionen in dieser Datei
-#    import __main__
-#    dr = driver.Driver(params, __main__, adapter=base.DefaultAdapter())
-#    # 3. Ausführen und Speichern
-#    outputs = dr.execute(["uniflows","bert_input_unsw_nb15"])
-#
-#    output_path = Path(params["clean_output"])
-#    output_path.parent.mkdir(parents=True, exist_ok=True)
-#    outputs["bert_input_unsw_nb15"].to_csv(output_path, index=False)
-#
-#if __name__ == "__main__":
-#    create_bert_input()
-#

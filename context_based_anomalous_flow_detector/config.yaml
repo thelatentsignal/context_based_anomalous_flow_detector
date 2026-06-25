@@ -1,6 +1,44 @@
+
+
 unsw_nb15:
-  raw_input: "../data/unsw_nb15/NF-UNSW-NB15-v3_raw.csv"
+  raw_input: "../data/unsw_nb15/dummy_data.csv"
+  #raw_input: "../data/unsw_nb15/NF-UNSW-NB15-v3_raw.csv"
   clean_output: "../data/unsw_nb15/NF-UNSW-NB15-v3_input_to_bert.csv"
+  processed_data_dir: "../data/unsw_nb15/processed_data"
+  group_cols:
+    - ipsrc
+  time_col: starttime
+
 isolation_forest_unsw_nb15:
   raw_input: "../data/unsw_nb15/NF-UNSW-NB15-v3_raw.csv"
   clean_output: "../data/unsw_nb15/NF-UNSW-NB15-v3_input_to_isolation_forest.csv"
+
+#paths:
+#  training_data:  "../data/unsw_nb15/NF-UNSW-NB15-v3_input_to_bert.csv"
+
+description: building a runnable prototype
+experiment:
+  name: unsw_baseline_v1
+
+data:
+  dataset: NF-UNSW-NB15-v3
+  seq_len: 34
+
+model:
+  d_model: 32
+  nhead: 4
+  num_layers: 2
+  feature_dim: 51
+  dropout: 0.1
+  lr: 0.001
+
+training:
+  batch_size: 64
+  epochs: 20
+  learning_rate: 0.001
+  mask_probability: 0.15
+
+loss:
+  weight_num: 30
+  weight_proto: 1
+  weight_port: 0.5

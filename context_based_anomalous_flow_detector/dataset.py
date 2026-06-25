@@ -6,11 +6,11 @@ import typer
 
 from context_based_anomalous_flow_detector.config import PROCESSED_DATA_DIR, RAW_DATA_DIR
 """
-Load UNSW-NB15 CSV from data/raw/.../NF-UNSW-NB15-v3.csv.
+Load UNSW-NB15 CSV from data/raw/.../NF-UNSW-NB15-v3_raw.csv.
 
 Define a UNSWFlowDataset(torch.utils.data.Dataset) that returns single flows (and later pairs of flows for contrastive learning).
 
-Train/val split logic can live here or inside modeling/train.py.
+Train/val split logic can live here or inside models/train.py.
 
 """
 app = typer.Typer()

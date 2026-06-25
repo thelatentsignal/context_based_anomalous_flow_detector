@@ -17,9 +17,10 @@ a certain ip or protocol etc.
 1) clone repos
 2) create new conda env and activate it
 3) pip install -e .
-4) in the empty data folder download the nf-unswb-nb15-v3 dataset and place the file
-NF-UNSW-NB15-v3.csv directly into data. Rename to NF-UNSW-NB15-v3_raw.csv
+4) in the empty data/unsw_nb15 folder download the nf-unswb-nb15-v3 dataset and place the file
+NF-UNSW-NB15-v3.csv directly into data/unsw_nb15. Rename to NF-UNSW-NB15-v3_raw.csv
 
+Running create_data_unsw_nb15.py will create NF-UNSW-NB15-v3_input_to_bert.pt under data/unsw_nb15
 
 # Context_Based_Anomalous_Flow_Detector
 
