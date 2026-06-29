@@ -15,7 +15,9 @@ a certain ip or protocol etc.
 # Installation Instructions
 2. **Clone the repository:**
 1) clone repos
-2) create new conda env and activate it
+2) create new conda env and activate it with python >=3.12:
+   a) 'conda create -n context_based_anomalous_flow_detector python=3.12'
+   b) conda activate context_based_anomalous_flow_detector
 3) pip install -e .
 4) in the empty data folder download the nf-unswb-nb15-v3 dataset and place the file
 NF-UNSW-NB15-v3.csv directly into data. Rename to NF-UNSW-NB15-v3_raw.csv

@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 from pathlib import Path
 
-# Hier importierst du deine bestehenden Klassen aus dem ersten Skript
-from mini_bert import MiniBert, get_training_data_bert, create_sequences
+from context_based_anomalous_flow_detector.modeling.mini_bert import MiniBert, get_training_data_bert, create_sequences
 
 
 def calculate_flow_anomaly_scores(model, batch):

@@ -1,16 +1,12 @@
 import pytest
-import numpy as np
-import pandas as pd
-import torch
 
 import pytest
 import numpy as np
 import pandas as pd
-import torch
 
 # Assuming your function is in data/pipeline.py
 # from context_based_anomalous_flow_detector.data.pipeline import create_sequences
-from context_based_anomalous_flow_detector.mini_bert.mini_bert import create_sequences
+from context_based_anomalous_flow_detector.modeling.mini_bert import create_sequences
 def test_create_sequences_truncation():
     """
     Verifies that create_sequences cleanly drops remainder rows
