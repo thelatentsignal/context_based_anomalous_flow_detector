@@ -9,6 +9,7 @@ from hamilton.function_modifiers import tag
 # .parent.parent ist der Root des Pakets
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PACKAGE_ROOT / "context_based_anomalous_flow_detector" / "config.yaml"
+# todo add a timestamp to the data_config.yaml
 
 # diese Date ist zweigeteilt. Erst die Transformationen und unten kommt der Hamilton driver
 ################ Transformationen ########################################

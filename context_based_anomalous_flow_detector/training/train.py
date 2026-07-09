@@ -10,7 +10,6 @@ from context_based_anomalous_flow_detector.config import load_config, get_datase
 from context_based_anomalous_flow_detector.modeling.mini_bert import MiniBert
 from context_based_anomalous_flow_detector.persistence import create_run_dir, save_training_run
 
-
 def train_step(
     model: torch.nn.Module,
     batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
@@ -22,7 +21,7 @@ def train_step(
     device = next(model.parameters()).device
     cont_batch, proto_batch, port_batch = [b.to(device) for b in batch]
 
-    batch_size, seq_len, _ = cont_batch.shape
+    batch_size, seq_len, num_cont_vals = cont_batch.shape
 
     target_cont = cont_batch
     target_proto = proto_batch
@@ -34,7 +33,7 @@ def train_step(
 
     mask = torch.rand(batch_size, seq_len, device=device) < 0.15
 
-    masked_cont_batch[mask] = 0.0
+    masked_cont_batch[mask] = -1.0
     masked_proto_batch[mask] = 256
     masked_port_batch[mask] = 65536
 
@@ -61,6 +60,7 @@ def train_step(
 def train_model() -> Path:
     config = load_config()
     dataset_params = get_dataset_params("unsw_nb15")
+    print('loaded the dataset parameters: ',dataset_params)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using hardware accelerator device: {device}")
@@ -139,6 +139,7 @@ def train_model() -> Path:
 
 
 if __name__ == "__main__":
+    print('calling train_model')
     train_model()
 #
 ## --- 6. EXECUTION RUNNER ---
@@ -217,7 +218,8 @@ if __name__ == "__main__":
 #    print("Protocol Logits Out Shape:      ", out_proto.shape)  # Expected: [64, 34, 257]
 ##todo mach eine quantisierung über die Ports anstatt jeden einzelnen vorhersagen zu wollen
 ## todo: 3. Effizientere Token-Maskierung (Die 80-10-10-Regel)
-## Aktuell ersetzt du jeden ausgewählten Flow starr zu 100% mit den Maskierungs-Tokens (0.0, 256, 65536). Das entspricht dem Ur-BERT-Paper, führt aber dazu, dass das Modell bei der echten Inferenz (ohne Masken) eine Diskrepanz sieht.
+## Aktuell ersetzt du jeden ausgewählten Flow starr zu 100% mit den Maskierungs-Tokens (0.0, 256, 65536).
+# Das entspricht dem Ur-BERT-Paper, führt aber dazu, dass das Modell bei der echten Inferenz (ohne Masken) eine Diskrepanz sieht.
 ##
 ## Moderne BERT-Architekturen nutzen beim Erstellen der Maske folgende Verteilung für die ausgewählten 15%:
 ##

@@ -179,57 +179,57 @@ class MiniBert(nn.Module):
 
 
 
-# --- 4. STEP-WISE TRAINING FUNCTION ---
-def train_step(
-        model:torch.nn.Module,
-        batch:tuple[torch.Tensor, torch.Tensor, torch.Tensor], # shape [batch_size, seq_len, 13], [batch_size, seq_len], [batch_size, seq_len]
-        optimizer:torch.optim.Optimizer,
-        criterion:torch.nn.Module
-)->float:
-
-    optimizer.zero_grad()
-    device = next(model.parameters()).device
-
-    cont_batch, proto_batch, port_batch = [b.to(device) for b in batch]
-    B, S, _ = cont_batch.shape
-
-    target_cont = cont_batch
-    target_proto = proto_batch
-    target_port = port_batch
-
-    masked_cont_batch = cont_batch.clone()
-    masked_proto_batch = proto_batch.clone()
-    masked_port_batch = port_batch.clone()
-
-    # num_continuous_features: int = 13,
-    # num_categorical_features: int = 2,
-    mask = torch.rand(B, S, device=device) < .15
-    masked_cont_batch[mask] = 0.0
-    masked_port_batch[mask] = 65536  # Port Mask Slot
-    masked_proto_batch[mask] = 256  # Protocol Mask Slot
-
-    prediction_cont, prediction_proto, prediction_port = model(
-        masked_cont_batch,   masked_proto_batch, masked_port_batch
-    ) # shape three vectors
-
-    # Compute loss strictly evaluated across the targeted masking index
-    mse_loss, cross_entropy_loss = criterion
-    cont_loss = mse_loss(prediction_cont[mask], target_cont[mask])
-    # nicht vergessen! prediction_proto[mask] liefert [N, 257]. target_proto[mask] liefert [N]., evtl. muss ich hier die
-    # shapes anpassen
-    proto_loss = cross_entropy_loss(prediction_proto[mask], target_proto[mask]) # shape proto_batch [batch_size, seq_length]
-    port_loss = cross_entropy_loss(prediction_port[mask], target_port[mask])
-
-    # weigh the individual errors such that they are similar, e.g mse will be E[(X-Y)^2] = 0.166
-    # error proto = -log(1/256) = 5.55
-    # error port = -log(1/65537) = 11.09
-    weight_num = 30 # because .166*30 = 4.98
-    weight_proto = 1 # because 1*5.55 = 5.55
-    weight_port = .5 # because 11.09/2 ~= 5.5
-    loss = weight_num * cont_loss + weight_proto * proto_loss + weight_port*port_loss
-    loss.backward()
-    optimizer.step()
-    return loss.item()
+## --- 4. STEP-WISE TRAINING FUNCTION ---
+#def train_step(
+#        model:torch.nn.Module,
+#        batch:tuple[torch.Tensor, torch.Tensor, torch.Tensor], # shape [batch_size, seq_len, 13], [batch_size, seq_len], [batch_size, seq_len]
+#        optimizer:torch.optim.Optimizer,
+#        criterion:torch.nn.Module
+#)->float:
+#
+#    optimizer.zero_grad()
+#    device = next(model.parameters()).device
+#
+#    cont_batch, proto_batch, port_batch = [b.to(device) for b in batch]
+#    B, S, _ = cont_batch.shape
+#
+#    target_cont = cont_batch
+#    target_proto = proto_batch
+#    target_port = port_batch
+#
+#    masked_cont_batch = cont_batch.clone()
+#    masked_proto_batch = proto_batch.clone()
+#    masked_port_batch = port_batch.clone()
+#
+#    # num_continuous_features: int = 13,
+#    # num_categorical_features: int = 2,
+#    mask = torch.rand(B, S, device=device) < .15
+#    masked_cont_batch[mask] = 0.0
+#    masked_port_batch[mask] = 65536  # Port Mask Slot
+#    masked_proto_batch[mask] = 256  # Protocol Mask Slot
+#
+#    prediction_cont, prediction_proto, prediction_port = model(
+#        masked_cont_batch,   masked_proto_batch, masked_port_batch
+#    ) # shape three vectors
+#
+#    # Compute loss strictly evaluated across the targeted masking index
+#    mse_loss, cross_entropy_loss = criterion
+#    cont_loss = mse_loss(prediction_cont[mask], target_cont[mask])
+#    # nicht vergessen! prediction_proto[mask] liefert [N, 257]. target_proto[mask] liefert [N]., evtl. muss ich hier die
+#    # shapes anpassen
+#    proto_loss = cross_entropy_loss(prediction_proto[mask], target_proto[mask]) # shape proto_batch [batch_size, seq_length]
+#    port_loss = cross_entropy_loss(prediction_port[mask], target_port[mask])
+#
+#    # weigh the individual errors such that they are similar, e.g mse will be E[(X-Y)^2] = 0.166
+#    # error proto = -log(1/256) = 5.55
+#    # error port = -log(1/65537) = 11.09
+#    weight_num = 30 # because .166*30 = 4.98
+#    weight_proto = 1 # because 1*5.55 = 5.55
+#    weight_port = .5 # because 11.09/2 ~= 5.5
+#    loss = weight_num * cont_loss + weight_proto * proto_loss + weight_port*port_loss
+#    loss.backward()
+#    optimizer.step()
+#    return loss.item()
 
 
 
@@ -267,44 +267,44 @@ def create_sequences(data: pd.DataFrame, seq_len: int = 34) -> tuple[torch.Tenso
 
     return (cont_seqs, proto_seqs, port_seqs)
 
-def save_model_safely(
-        directory: str | Path,
-        model: torch.nn.Module,
-        base_name: str='model')->Path:
-    # Verzeichnis erstellen, falls es nicht existiert
+#def save_model_safely(
+#        directory: str | Path,
+#        model: torch.nn.Module,
+#        base_name: str='model')->Path:
+#    # Verzeichnis erstellen, falls es nicht existiert
+#
+#
+#    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+#    dest: Path = Path(directory) / f"{base_name}_{timestamp}.pt"
+#    dest.parent.mkdir(parents=True, exist_ok=True)
+#    torch.save(model.state_dict(), dest)
+#    return dest
 
-
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    dest: Path = Path(directory) / f"{base_name}_{timestamp}.pt"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), dest)
-    return dest
-
-def verify_and_load_model(
-    filepath: str | Path,
-    model_class: torch.nn.Module
-) -> torch.nn.Module:
-    """Lädt ein gespeichertes state_dict in eine frische Modell-Instanz
-    und versetzt es in den Evaluierungsmodus.
-    """
-    path: Path = Path(filepath)
-
-    # 1. Prüfen, ob die Datei überhaupt existiert
-    if not path.exists():
-        raise FileNotFoundError(f"Keine Modelldatei unter {path} gefunden.")
-
-    # 2. Eine leere Instanz der Modell-Architektur erstellen
-    # (model_class() ruft den Konstruktor deiner Klasse auf, z.B. MyNetwork())
-    loaded_model: torch.nn.Module = model_class()
-
-    # 3. Gewichte laden und in die Architektur einfügen
-    # weights_only=True ist ein wichtiger Sicherheitsstandard seit PyTorch 2.4
-    state_dict = torch.load(path, map_location="cpu", weights_only=True)
-    loaded_model.load_state_dict(state_dict)
-
-    # 4. WICHTIG: Modell in den Evaluierungsmodus versetzen
-    # Das deaktiviert Dropout und Batch-Normalization für die Inferenz
-    loaded_model.eval()
-
-    print(f"Modell erfolgreich von {path.name} geladen und validiert.")
-    return loaded_model
+#def verify_and_load_model(
+#    filepath: str | Path,
+#    model_class: torch.nn.Module
+#) -> torch.nn.Module:
+#    """Lädt ein gespeichertes state_dict in eine frische Modell-Instanz
+#    und versetzt es in den Evaluierungsmodus.
+#    """
+#    path: Path = Path(filepath)
+#
+#    # 1. Prüfen, ob die Datei überhaupt existiert
+#    if not path.exists():
+#        raise FileNotFoundError(f"Keine Modelldatei unter {path} gefunden.")
+#
+#    # 2. Eine leere Instanz der Modell-Architektur erstellen
+#    # (model_class() ruft den Konstruktor deiner Klasse auf, z.B. MyNetwork())
+#    loaded_model: torch.nn.Module = model_class()
+#
+#    # 3. Gewichte laden und in die Architektur einfügen
+#    # weights_only=True ist ein wichtiger Sicherheitsstandard seit PyTorch 2.4
+#    state_dict = torch.load(path, map_location="cpu", weights_only=True)
+#    loaded_model.load_state_dict(state_dict)
+#
+#    # 4. WICHTIG: Modell in den Evaluierungsmodus versetzen
+#    # Das deaktiviert Dropout und Batch-Normalization für die Inferenz
+#    loaded_model.eval()
+#
+#    print(f"Modell erfolgreich von {path.name} geladen und validiert.")
+#    return loaded_model

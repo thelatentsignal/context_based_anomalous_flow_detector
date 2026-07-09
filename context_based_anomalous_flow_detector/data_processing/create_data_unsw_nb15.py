@@ -72,6 +72,7 @@ def sorted_flows(
 ) -> pd.DataFrame:
     return uniflows.sort_values(by=group_cols + [time_col]).reset_index(drop=True)
 
+# todo uses fixed numbers for scaling. Maybe not a good idea. Must change when using other data!
 def featurized_data(
         sorted_flows: pd.DataFrame,
         group_cols: list[str],
@@ -82,7 +83,8 @@ def featurized_data(
     # compute time differences
     data["time_delta"] = data.groupby(group_cols)[time_col].diff().fillna(0)
 
-    # Scaling Transformations
+
+    # Scaling Transformations - normalization
     data["bytes_in"] = np.log1p(data["bytes_in"].astype(np.float32)) / 20.0
     data["bytes_out"] = np.log1p(data["bytes_out"].astype(np.float32)) / 20.0
     data["packets_in"] = np.log1p(data["packets_in"].astype(np.float32)) / 12.0
@@ -92,6 +94,7 @@ def featurized_data(
     data["ttl"] = data["ttl"].astype(np.float32) / 255.0
 
     # Flag Bitmask Parsing
+    # todo - ist das sinnvoll? die Werte sind fast alle 0
     flags_series = data["tcpflags"].fillna(0).astype(np.int64)
     data["tcp_fin"] = ((flags_series & 1) > 0).astype(np.float32)
     data["tcp_syn"] = ((flags_series & 2) > 0).astype(np.float32)
@@ -104,24 +107,6 @@ def featurized_data(
     data["proto"] = data["proto"].fillna(0).astype(np.int64)
 
     return data
-    #feature_order = [
-    #    "bytes_in",
-    #    "bytes_out",
-    #    "packets_in",
-    #    "packets_out",
-    #    "ttl",
-    #    "duration",
-    #    "time_delta",
-    #    "tcp_fin",
-    #    "tcp_syn",
-    #    "tcp_rst",
-    #    "tcp_psh",
-    #    "tcp_ack",
-    #    "tcp_urg",
-    #    "portdst",
-    #    "proto",
-    #]
-    #return data[feature_order]
 
 ################ 3. Train / Eval / Test Splits & Sequenz-Generierung ################
 def _build_tensors(
@@ -242,24 +227,36 @@ def _build_tensors(
 
     return cont_seqs, proto_seqs, port_seqs, attention_mask
 
-def save_data_artifacts(splits: dict, config: dict, target_dir: Path) -> None:
+def save_data_artifacts(splits: dict, config: dict, dataset_id: str, target_dir: Path ) -> None:
     """Handles the physical writing of the tensors and config snapshot to disk."""
     target_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Save the PyTorch tensors
     torch.save(splits, target_dir / "tensors.pt")
 
-    # 2. Save the frozen config snapshot
+    # 2. Save the frozen config snapshot for the data section
+    data_config = {
+        "project": config.get("project", {}),
+        "dataset_id": dataset_id,
+        "dataset": config["datasets"][dataset_id],
+    }
+
     with open(target_dir / "data_config.yaml", "w") as f:
-        yaml.safe_dump(config, f)
+        yaml.safe_dump(data_config, f, sort_keys=False)
 
-    print(f"Artifacts successfully frozen in: {target_dir}")
+   # with open(target_dir / "data_config.yaml", "w") as f:
+   #     yaml.safe_dump(config, f)
 
+   # print(f"Artifacts successfully frozen in: {target_dir}")
+
+#todo do not split
 def final_tensor_splits(
         featurized_data: pd.DataFrame,
         group_cols: list[str],     # <-- Hamilton injects this from config
         time_col: str,             # <-- Hamilton injects this from config
-        seq_len: int = 34) -> dict[str, tuple]:
+        seq_len: int) -> dict[str, tuple]:
+
+    print('featurized data: ', featurized_data.head())
     """Führt den chronologischen Split durch und baut die PyTorch-Tensors."""
     total_rows = len(featurized_data)
     train_end = int(total_rows * 0.70)
@@ -268,8 +265,6 @@ def final_tensor_splits(
     df_train = featurized_data.iloc[:train_end]
     df_eval  = featurized_data.iloc[train_end:eval_end]
     df_test  = featurized_data.iloc[eval_end:]
-    #print(f'df_test: {df_test.head(4)}')
-    #print('hallloooooooooooooooooooooooooooooooo')
     return {
         "train": _build_tensors(df_train, group_cols, time_col, seq_len),
         "eval":  _build_tensors(df_eval, group_cols, time_col, seq_len),
@@ -277,8 +272,8 @@ def final_tensor_splits(
     }
 
 ################ 4. Hamilton Execution Driver ########################################
-def create_bert_input() -> None:
-    params = get_dataset_params(dataset_id="unsw_nb15")
+def create_bert_input(dataset_id:str) -> None:
+    params = get_dataset_params(dataset_id)
     config = load_config()
 
     module = sys.modules[__name__]
@@ -290,47 +285,9 @@ def create_bert_input() -> None:
     splits = outputs["final_tensor_splits"]
 
     output_dir = Path(params["processed_data_dir"])
-    save_data_artifacts(splits, config, output_dir)
+    save_data_artifacts(splits, config, dataset_id, output_dir)
 
     print(f"Pipeline erfolgreich! Splits als PyTorch-Artefakt gespeichert unter: {output_dir}")
-#def create_bert_input() -> None:
-#
-#    # reads in the config,
-#    # sets up the driver
-#    # creates the data
-#    # calls functio to save data
-#
-#    # get config
-#    params = get_dataset_params(dataset_id='unsw_nb15')
-#    #if not CONFIG_PATH.exists():
-#    #    raise FileNotFoundError(f"Config nicht gefunden unter: {CONFIG_PATH}")
-#
-#    #with open(CONFIG_PATH, "r") as f:
-#    #config = yaml.safe_load(f)
-#    config = load_config()
-#
-#    #params = config["unsw_nb15"]
-#
-#    # set up driver
-#    # This module is imported here, because it is ONLY needed here for
-#    # dependency injection when instantiating the Hamilton driver
-#    import create_data_unsw_nb15
-#    dr = driver.Driver(params, create_data_unsw_nb15, adapter=base.DefaultAdapter())
-#
-#    print("Starte Hamilton Daten-Pipeline...")
-#    outputs = dr.execute(["final_tensor_splits"])
-#    splits = outputs["final_tensor_splits"]
-#
-#    # Artefakt speichern
-#    # Delegate the saving to our engine function
-#    output_dir = Path(params["processed_data_dir"])
-#    save_data_artifacts(splits, config, output_dir)
-#
-#    #output_path = Path(params["clean_output"]).with_suffix(".pt")
-#    #output_path.parent.mkdir(parents=True, exist_ok=True)
-#
-#    #torch.save(splits, output_path)
-#    print(f"Pipeline erfolgreich! Splits als PyTorch-Artefakt gespeichert unter: {output_dir}")
 
 if __name__ == "__main__":
-    create_bert_input()
+    create_bert_input("unsw_nb15")
