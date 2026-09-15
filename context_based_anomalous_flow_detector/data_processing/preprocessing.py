@@ -10,9 +10,11 @@ import torch
 from context_based_anomalous_flow_detector.schema import (
     CONT_COLS,
     CONT_PAD_VALUE,
+    LABEL_PAD_VALUE,
     PORT_PAD_VALUE,
     PROTO_PAD_VALUE,
 )
+pd.options.mode.copy_on_write = True
 
 
 @dataclass
@@ -83,25 +85,39 @@ def featurize(sorted_df: pd.DataFrame, params: PreprocessParams) -> pd.DataFrame
 def chronological_split(
     featurized: pd.DataFrame, params: PreprocessParams
 ) -> dict[str, pd.DataFrame]:
+    """Split by a global time threshold across all hosts, not by row position.
+
+    `featurized` is sorted by group_cols + [time_col] (host first, then time within
+    host), so slicing by row position would split by host, not by time -- e.g. with
+    group_cols=["ipsrc"], most or all of a given host's traffic could end up in a
+    single split, and if attack traffic happens to come from hosts that sort earlier
+    than params.split, eval/test could end up with zero attack flows. Instead, compute
+    train/eval boundary timestamps from the global distribution of time_col, and assign
+    each row by comparing its own timestamp to those thresholds -- so every split gets
+    a temporal cross-section across every host.
+    """
     train_frac, eval_frac = params.split
-    total = len(featurized)
-    train_end = int(total * train_frac)
-    eval_end = int(total * eval_frac)
+    time_col = params.time_col
+    train_threshold, eval_threshold = featurized[time_col].quantile([train_frac, eval_frac])
     return {
-        "train": featurized.iloc[:train_end],
-        "eval": featurized.iloc[train_end:eval_end],
-        "test": featurized.iloc[eval_end:],
+        "train": featurized[featurized[time_col] <= train_threshold],
+        "eval": featurized[
+            (featurized[time_col] > train_threshold) & (featurized[time_col] <= eval_threshold)
+        ],
+        "test": featurized[featurized[time_col] > eval_threshold],
     }
 
 
 def _build_sequence_tensors(
     df_slice: pd.DataFrame,
     params: PreprocessParams,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Split per-group flows into masked sequences of seq_len.
 
-    Returns (cont, proto, port, mask) where mask is PyTorch Transformer
-    convention (True = pad/ignore)."""
+    Returns (cont, proto, port, mask, label) where mask is PyTorch Transformer
+    convention (True = pad/ignore). label is ground-truth benign/attack per
+    flow, carried alongside for evaluation only -- it is never fed to the
+    model as an input feature."""
     seq_len = params.seq_len
     group_cols = params.group_cols
 
@@ -109,6 +125,7 @@ def _build_sequence_tensors(
     all_proto: list[torch.Tensor] = []
     all_port: list[torch.Tensor] = []
     all_mask: list[torch.Tensor] = []
+    all_label: list[torch.Tensor] = []
 
     for _, group_df in df_slice.groupby(group_cols):
         n = len(group_df)
@@ -132,6 +149,11 @@ def _build_sequence_tensors(
                 )
             )
             all_mask.append(torch.zeros((n_full, seq_len), dtype=torch.bool))
+            all_label.append(
+                torch.from_numpy(full_df["label"].values.astype(np.int64)).reshape(
+                    n_full, seq_len
+                )
+            )
 
         if left_overs > 0:
             leftover_df = group_df.iloc[full_rows:]
@@ -139,6 +161,7 @@ def _build_sequence_tensors(
             proto_pad = torch.full((seq_len,), PROTO_PAD_VALUE, dtype=torch.long)
             port_pad = torch.full((seq_len,), PORT_PAD_VALUE, dtype=torch.long)
             mask = torch.full((seq_len,), True, dtype=torch.bool)
+            label_pad = torch.full((seq_len,), LABEL_PAD_VALUE, dtype=torch.long)
 
             cont_pad[:left_overs] = torch.from_numpy(
                 leftover_df[CONT_COLS].values.astype(np.float32)
@@ -148,17 +171,22 @@ def _build_sequence_tensors(
                 leftover_df["portdst"].values.astype(np.int64)
             )
             mask[:left_overs] = False
+            label_pad[:left_overs] = torch.from_numpy(
+                leftover_df["label"].values.astype(np.int64)
+            )
 
             all_cont.append(cont_pad.unsqueeze(0))
             all_proto.append(proto_pad.unsqueeze(0))
             all_port.append(port_pad.unsqueeze(0))
             all_mask.append(mask.unsqueeze(0))
+            all_label.append(label_pad.unsqueeze(0))
 
     return (
         torch.cat(all_cont, dim=0),
         torch.cat(all_proto, dim=0),
         torch.cat(all_port, dim=0),
         torch.cat(all_mask, dim=0),
+        torch.cat(all_label, dim=0),
     )
 
 
@@ -172,7 +200,7 @@ def preprocess_to_tensors(
     return {
         name: dict(
             zip(
-                ["cont", "proto", "port", "mask"],
+                ["cont", "proto", "port", "mask", "label"],
                 _build_sequence_tensors(split_df, params),
             )
         )

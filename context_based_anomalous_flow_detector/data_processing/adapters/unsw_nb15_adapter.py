@@ -24,6 +24,8 @@ def create_canonical_data(dataset_id: str, version: str) -> pd.DataFrame:
         "FLOW_DURATION_MILLISECONDS",
         "FLOW_START_MILLISECONDS",
         "PROTOCOL",
+        "Label",
+        "Attack",
     ]
 
     res_df = raw_data[cols].copy()
@@ -42,6 +44,8 @@ def create_canonical_data(dataset_id: str, version: str) -> pd.DataFrame:
             "FLOW_DURATION_MILLISECONDS": "duration",
             "FLOW_START_MILLISECONDS": "starttime",
             "TCP_FLAGS": "tcpflags",
+            "Label": "label",
+            "Attack": "attack",
         },
         inplace=True,
     )

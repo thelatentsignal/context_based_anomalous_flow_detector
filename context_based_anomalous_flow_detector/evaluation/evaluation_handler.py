@@ -1,4 +1,4 @@
-"""EvaluationHandler: evaluates a trained MiniBert model on masked-token prediction.
+"""EvaluationHandler: evaluates a trained AnoBert model on masked-token prediction.
 
 Analogous to TrainerHandler but for the evaluation stage: reads the test split of the
 preprocessed tensors, masks random tokens exactly like training does, and measures how
@@ -14,7 +14,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from context_based_anomalous_flow_detector.data_processing._manifest import read_manifest
-from context_based_anomalous_flow_detector.modeling.mini_bert import MiniBert
+from context_based_anomalous_flow_detector.modeling.anobert import AnoBert
 from context_based_anomalous_flow_detector.paths import BASE_DATA_PATH, TRAINED_MODELS_DIR
 from context_based_anomalous_flow_detector.schema import (
     CONT_PAD_VALUE,
@@ -141,9 +141,9 @@ class EvaluationHandler:
         training_manifest: dict[str, Any],
         seq_len: int,
         device: torch.device,
-    ) -> MiniBert:
+    ) -> AnoBert:
         model_cfg = training_manifest["training_params"]["model"]
-        model = MiniBert(
+        model = AnoBert(
             num_continuous_features=model_cfg["num_cont_features"],
             d_model=model_cfg["d_model"],
             nhead=model_cfg["n_heads"],

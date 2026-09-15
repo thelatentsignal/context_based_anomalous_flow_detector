@@ -21,15 +21,20 @@ dependencies = [
  "torch",
  "pandas",
  "numpy",
- "torch",
  "scikit-learn",
  "tqdm",
+ "typer",
  "dvc",
  "sf-hamilton",
  "matplotlib",
- "numpy",
- "pandas",
  "loguru",
+ "pyarrow",
+]
+
+[project.optional-dependencies]
+dev = [
+ "pytest",
+ "ruff",
 ]
 
 

@@ -1,46 +1,59 @@
-
 from pathlib import Path
 from typing import Any
 
 import torch
-import torch.nn as nn
+from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from context_based_anomalous_flow_detector.config import load_config, get_dataset_params
-from context_based_anomalous_flow_detector.modeling.mini_bert import MiniBert
-from context_based_anomalous_flow_detector.persistence import create_run_dir, save_training_run
+from context_based_anomalous_flow_detector.modeling.anobert import AnoBert
+from context_based_anomalous_flow_detector.schema import (
+    CONT_PAD_VALUE,
+    PORT_PAD_VALUE,
+    PROTO_PAD_VALUE,
+)
+
 
 def train_step(
     model: torch.nn.Module,
-    batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
     optimizer: torch.optim.Optimizer,
     criterion: tuple[torch.nn.Module, torch.nn.Module],
 ) -> float:
+    """Run one masked-token-prediction step, ignoring padding positions."""
     optimizer.zero_grad()
 
     device = next(model.parameters()).device
-    cont_batch, proto_batch, port_batch = [b.to(device) for b in batch]
+    cont_batch, proto_batch, port_batch, attn_mask_batch = [b.to(device) for b in batch]
 
-    batch_size, seq_len, num_cont_vals = cont_batch.shape
+    batch_size, seq_len, _ = cont_batch.shape
 
     target_cont = cont_batch
     target_proto = proto_batch
     target_port = port_batch
 
+    # attention mask: True = padding, False = real data
+    real = ~attn_mask_batch
+
+    # mask 15% of the real (non-padded) positions
+    mask = torch.rand(batch_size, seq_len, device=device) < 0.15
+    mask = mask & real
+
+    if not mask.any():
+        return 0.0
+
     masked_cont_batch = cont_batch.clone()
     masked_proto_batch = proto_batch.clone()
     masked_port_batch = port_batch.clone()
 
-    mask = torch.rand(batch_size, seq_len, device=device) < 0.15
-
-    masked_cont_batch[mask] = -1.0
-    masked_proto_batch[mask] = 256
-    masked_port_batch[mask] = 65536
+    masked_cont_batch[mask] = CONT_PAD_VALUE
+    masked_proto_batch[mask] = PROTO_PAD_VALUE
+    masked_port_batch[mask] = PORT_PAD_VALUE
 
     pred_cont, pred_proto, pred_port = model(
         masked_cont_batch,
         masked_proto_batch,
         masked_port_batch,
+        key_padding_mask=attn_mask_batch,
     )
 
     mse_loss, cross_entropy_loss = criterion
@@ -57,176 +70,144 @@ def train_step(
     return loss.item()
 
 
-def train_model() -> Path:
-    config = load_config()
-    dataset_params = get_dataset_params("unsw_nb15")
-    print('loaded the dataset parameters: ',dataset_params)
+def _resolve_device(config: dict[str, Any]) -> torch.device:
+    choice = config.get("training", {}).get("device", "auto")
+    if choice == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(choice)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using hardware accelerator device: {device}")
+def eval_step(
+    model: torch.nn.Module,
+    batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+    criterion: tuple[torch.nn.Module, torch.nn.Module],
+) -> float:
+    """Masked-token-prediction loss on a batch, no gradient computation."""
+    device = next(model.parameters()).device
+    cont_batch, proto_batch, port_batch, attn_mask_batch = [b.to(device) for b in batch]
 
-    tensor_path = Path(dataset_params["processed_data_dir"]) / "tensors.pt"
+    batch_size, seq_len, _ = cont_batch.shape
+    real = ~attn_mask_batch
 
-    if not tensor_path.exists():
-        raise FileNotFoundError(f"Tensor artifact not found: {tensor_path}")
+    mask = torch.rand(batch_size, seq_len, device=device) < 0.15
+    mask = mask & real
 
-    splits = torch.load(tensor_path, map_location="cpu", weights_only=True)
+    if not mask.any():
+        return None  # signal "skip this batch" to the caller, don't fake a 0.0
 
-    train_cont, train_proto, train_port, _train_attention_mask = splits["train"]
+    masked_cont_batch = cont_batch.clone()
+    masked_proto_batch = proto_batch.clone()
+    masked_port_batch = port_batch.clone()
+    masked_cont_batch[mask] = CONT_PAD_VALUE
+    masked_proto_batch[mask] = PROTO_PAD_VALUE
+    masked_port_batch[mask] = PORT_PAD_VALUE
 
-    dataset = TensorDataset(train_cont, train_proto, train_port)
-
-    batch_size = config["training"]["batch_size"]
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        drop_last=True,
+    pred_cont, pred_proto, pred_port = model(
+        masked_cont_batch, masked_proto_batch, masked_port_batch,
+        key_padding_mask=attn_mask_batch,
     )
 
-    model_cfg: dict[str, Any] = config["model"]
+    mse_loss, cross_entropy_loss = criterion
+    cont_loss = mse_loss(pred_cont[mask], cont_batch[mask])
+    proto_loss = cross_entropy_loss(pred_proto[mask], proto_batch[mask])
+    port_loss = cross_entropy_loss(pred_port[mask], port_batch[mask])
 
-    model = MiniBert(
-        num_continuous_features=model_cfg["num_cont_features"],
-        d_model=model_cfg["d_model"],
-        nhead=model_cfg["n_heads"],
-        num_layers=model_cfg["num_layers"],
-        max_seq_len=dataset_params["seq_len"],
+    loss = 30.0 * cont_loss + 1.0 * proto_loss + 0.5 * port_loss
+    return loss.item()
+
+
+
+def train_model(
+    dataloader: DataLoader,
+    eval_dataloader: DataLoader,
+    params: "TrainingParams",
+    seq_len: int,
+    device: torch.device,
+    patience: int = 5,
+    min_delta: float = 1e-4,
+    initial_state_dict: dict[str, torch.Tensor] | None = None,
+    initial_best_eval_loss: float = float("inf"),
+    initial_best_epoch: int = 0,
+    epoch_offset: int = 0,
+) -> tuple[nn.Module, dict[str, Any]]:
+    """Train an AnoBert model. No file I/O — caller handles persistence.
+
+    Pass `initial_state_dict` (with its `initial_best_eval_loss`/`initial_best_epoch`)
+    to warm-start from a previously trained checkpoint instead of a random init.
+    `epoch_offset` numbers the metrics keys so a resumed run's epochs don't collide
+    with the epochs already recorded for that checkpoint. The returned model's
+    weights are always the best-eval-loss weights seen across the checkpoint and
+    this call combined -- never just the last epoch run -- so a caller that always
+    saves/loads `model.state_dict()` can never regress to a worse checkpoint.
+    """
+    model = AnoBert(
+        num_continuous_features=params.num_cont_features,
+        d_model=params.d_model,
+        nhead=params.n_heads,
+        num_layers=params.num_layers,
+        max_seq_len=seq_len,
     ).to(device)
+    if initial_state_dict is not None:
+        model.load_state_dict(initial_state_dict)
 
     optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=config["training"]["learning_rate"],
-        weight_decay=config["training"]["weight_decay"],
+        model.parameters(), lr=params.learning_rate, weight_decay=params.weight_decay,
     )
-
     criterion = (nn.MSELoss(), nn.CrossEntropyLoss())
 
-    num_epochs = config["training"]["num_epochs"]
-
     model.train()
-
     metrics: dict[str, Any] = {}
+    best_eval_loss = initial_best_eval_loss
+    best_epoch = initial_best_epoch
+    best_state_dict = (
+        {k: v.clone() for k, v in initial_state_dict.items()}
+        if initial_state_dict is not None
+        else None
+    )
+    epochs_without_improvement = 0
+    stopped_epoch = epoch_offset + params.num_epochs
 
-    for epoch in range(num_epochs):
+    for epoch in range(params.num_epochs):
+        epoch_num = epoch_offset + epoch + 1
         total_loss = 0.0
-
         for batch in dataloader:
             loss_val = train_step(model, batch, optimizer, criterion)
             total_loss += loss_val
-
         mean_loss = total_loss / len(dataloader)
-        metrics[f"epoch_{epoch + 1}_train_loss"] = mean_loss
 
-        print(
-            f"Epoch {epoch + 1}/{num_epochs} complete. "
-            f"Mean batch loss: {mean_loss:.6f}"
-        )
+        model.eval()
+        eval_losses = []
+        with torch.no_grad():
+            for eval_batch in eval_dataloader:
+                loss_val = eval_step(model, eval_batch, criterion)
+                if loss_val is not None:
+                    eval_losses.append(loss_val)
+        mean_eval_loss = sum(eval_losses) / len(eval_losses)
+        model.train()
 
-    run_name = config["project"]["experiment_name"]
-    run_dir = create_run_dir(run_name)
+        metrics[f"epoch_{epoch_num}_train_loss"] = mean_loss
+        metrics[f"epoch_{epoch_num}_eval_loss"] = mean_eval_loss
+        print(f"Epoch {epoch_num} (run epoch {epoch + 1}/{params.num_epochs}) — train: {mean_loss:.6f}  eval: {mean_eval_loss:.6f}")
 
-    save_training_run(
-        model=model,
-        config=config,
-        metrics=metrics,
-        run_dir=run_dir,
-    )
+        if mean_eval_loss < best_eval_loss - min_delta:
+            best_eval_loss = mean_eval_loss
+            best_epoch = epoch_num
+            best_state_dict = {k: v.clone() for k, v in model.state_dict().items()}
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement >= patience:
+                stopped_epoch = epoch_num
+                print(f"Early stopping at epoch {stopped_epoch} (best eval: {best_eval_loss:.6f} from epoch {best_epoch})")
+                break
 
-    print(f"Saved training run to: {run_dir}")
+    if best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
 
-    return run_dir
+    metrics["best_eval_loss"] = best_eval_loss
+    metrics["best_epoch"] = best_epoch
+    metrics["stopped_epoch"] = stopped_epoch
+    return model, metrics
 
 
 if __name__ == "__main__":
-    print('calling train_model')
     train_model()
-#
-## --- 6. EXECUTION RUNNER ---
-#if __name__ == "__main__":
-#    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#    print(f"Using hardware accelerator device: {device}")
-#    file_path = "/home/irene/DataSSD/Code/context_based_anomalous_flow_detector/data/unsw_nb15/NF-UNSW-NB15-v3_input_to_bert.csv"
-#    SEQ_LEN = 34
-#    INPUT_DIM = 15
-#    D_MODEL = 32
-#    NHEAD = 4
-#    NUM_LAYERS = 2
-#    MAX_SEQ_LEN = 34
-#    BATCH_SIZE = 64
-#
-#    # Execution Fallback logic for sandbox vs local test environments
-#    if Path(file_path).exists():
-#        print("Loading real NetFlow processing dataframe...")
-#        df = get_training_data_bert(file_path)
-#        bert_input = create_sequences(df, seq_len=SEQ_LEN)
-#    else:
-#        print(
-#            "File target path unavailable. Exiting." #Injecting safe 15-dim structural Dummy Tensors..."
-#        )
-#        sys.exit()
-#        # bert_input = create_dummy_data()
-#
-#    # print("Final Shape Processing Matrix Target Setup:", bert_input.shape)
-#
-#    dataset = TensorDataset(*bert_input)
-#    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
-#
-#    model = MiniBert(input_dim=INPUT_DIM, d_model=D_MODEL, nhead=NHEAD, num_layers=NUM_LAYERS, max_seq_len=MAX_SEQ_LEN)
-#    model = model.to(device)  # <-- Push weights to GPU VRAM
-#
-#    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-#    criterion = (nn.MSELoss(), nn.CrossEntropyLoss())
-#
-#    EPOCHS = 20
-#    model.train()
-#    for epoch in range(EPOCHS):
-#        total_loss = 0.0
-#        for batch_idx, batch in enumerate(dataloader):
-#            loss_val = train_step(model, batch, optimizer, criterion)
-#            total_loss += loss_val
-#        print(
-#            f"Epoch {epoch+1}/{EPOCHS} complete. Mean Batch Loss value: {total_loss / len(dataloader):.6f}"
-#        )
-#
-#    saved_model = save_model_safely("./checkpoints", model)
-#    # Verzeichnis erstellen, falls es nicht existiert
-#
-#    # todo use tensorboard
-#    # todo use zero padding when preparing the data instead of cutting things off
-#    # todo do not use mse only, but use another method for the categorical values
-#
-#    # 1. Pfad definieren
-#    # model_path: Path = Path(saved_model.stem())
-#
-#    # 2. Modell laden (wir übergeben die Klasse selbst, ohne Klammern!)
-#    loaded_model = verify_and_load_model(saved_model, MiniBert)
-#    loaded_model = loaded_model.to(device)
-#    # 2. Mimicking your real separated data stream typesggvG
-#    batch_size, seq_len = 64, 34
-#
-#    simulated_cont  = torch.randn(batch_size, seq_len, 13).to(device)            # Floats
-#    simulated_ports = torch.randint(0, 65535, (batch_size, seq_len)).to(device)  # Longs
-#    simulated_proto = torch.randint(0, 255, (batch_size, seq_len)).to(device)    # Longs
-#
-#    with torch.no_grad():
-#        out_cont, out_port, out_proto = loaded_model(simulated_cont, simulated_proto, simulated_ports)
-#
-#    print("--- Production Model Sanity Check Passed ---")
-#    print("Continuous Features Out Shape: ", out_cont.shape)  # Expected: [64, 34, 13]
-#    print("Port Logits Out Shape:          ", out_port.shape)  # Expected: [64, 34, 65537]
-#    print("Protocol Logits Out Shape:      ", out_proto.shape)  # Expected: [64, 34, 257]
-##todo mach eine quantisierung über die Ports anstatt jeden einzelnen vorhersagen zu wollen
-## todo: 3. Effizientere Token-Maskierung (Die 80-10-10-Regel)
-## Aktuell ersetzt du jeden ausgewählten Flow starr zu 100% mit den Maskierungs-Tokens (0.0, 256, 65536).
-# Das entspricht dem Ur-BERT-Paper, führt aber dazu, dass das Modell bei der echten Inferenz (ohne Masken) eine Diskrepanz sieht.
-##
-## Moderne BERT-Architekturen nutzen beim Erstellen der Maske folgende Verteilung für die ausgewählten 15%:
-##
-## 80% der Fälle: Ersetzen mit dem echten [MASK]-Token (wie du es tust).
-##
-## 10% der Fälle: Ersetzen mit einem völlig zufälligen Port/Protokoll (zwingt das Modell dazu, Kontext kritisch zu hinterfragen, statt der Maske blind zu vertrauen).
-##
-## 10% der Fälle: Den echten Wert unverändert lassen (verbessert die Repräsentation der realen Datenströme).
-##
-## Das kannst du in deine train_step einbauen, sobald das Basistraining stabil konvergiert.

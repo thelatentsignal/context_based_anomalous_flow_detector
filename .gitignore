@@ -7,6 +7,7 @@ data/**/interim/
 
 # Ignore training runs
 models/
+runs/
 
 # Ignore evaluation output
 reports/

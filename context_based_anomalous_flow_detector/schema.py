@@ -39,6 +39,8 @@ CANONICAL_COLUMNS: list[CanonicalColumn] = [
     CanonicalColumn("duration", np.int32),
     CanonicalColumn("starttime", np.int64),
     CanonicalColumn("proto", np.int16),
+    CanonicalColumn("label", np.int16),
+    CanonicalColumn("attack", str),
 ]
 
 CANONICAL_COLUMN_NAMES: list[str] = [c.name for c in CANONICAL_COLUMNS]
@@ -112,6 +114,10 @@ CONT_COLS: list[str] = [
 CONT_PAD_VALUE: float = -1.0
 PROTO_PAD_VALUE: int = 256
 PORT_PAD_VALUE: int = 65536
+# Ground-truth label is carried alongside the model input for evaluation only
+# (never fed to the model), so it needs its own pad sentinel too. -1 is safe
+# because real labels are 0 (benign) / 1 (attack).
+LABEL_PAD_VALUE: int = -1
 
 
 def now_iso() -> str:
