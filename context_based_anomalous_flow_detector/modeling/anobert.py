@@ -11,6 +11,13 @@ class AnoBertEmbeddingLayer(nn.Module):
         feature_dim: int = 51,
         d_model: int = 32,
         max_seq_len: int = 34,
+        # 65537 = the old raw-port scheme's default (0-65535 + 1 for the mask/pad
+        # sentinel), kept as the default here only so this class stays constructible
+        # standalone (e.g. in tests) without wiring through the quantized vocab size.
+        # Real runs pass this in from schema.port_vocab_size(params.port_top_k) + 1
+        # (see training/trainer_handler.py) so it matches whatever the preprocessing
+        # stage's port quantization produced.
+        num_port_classes: int = 65537,
     ):
         super().__init__()
         self.num_continuous_features = num_continuous_features
@@ -18,6 +25,7 @@ class AnoBertEmbeddingLayer(nn.Module):
         self.feature_dim = feature_dim
         self.d_model = d_model
         self.max_seq_len = max_seq_len
+        self.num_port_classes = num_port_classes
 
         self.position_embeddings = nn.Embedding(max_seq_len, d_model)
 
@@ -29,7 +37,7 @@ class AnoBertEmbeddingLayer(nn.Module):
             ]
         )
         # Discrete Token Embeddings (Allocating unique dictionary rows for masking tokens)
-        self.port_dst_embedding = nn.Embedding(65537, self.feature_dim)  # 0-65535 + 1 for the mask
+        self.port_dst_embedding = nn.Embedding(num_port_classes, self.feature_dim)
         self.proto_embedding = nn.Embedding(257, self.feature_dim)  # 0-255   + 1 for the mask
 
         # Mathematically derived bottleneck fusion layer bounds
@@ -98,6 +106,7 @@ class AnoBert(nn.Module):
         nhead: int = 4,
         num_layers: int = 2,
         max_seq_len: int = 34,
+        num_port_classes: int = 65537,  # see AnoBertEmbeddingLayer's docstring on this default
     ):
         super().__init__()
         self.num_continuous_features = num_continuous_features
@@ -108,6 +117,7 @@ class AnoBert(nn.Module):
         self.nhead = nhead
         self.num_layers = num_layers
         self.max_seq_len = max_seq_len
+        self.num_port_classes = num_port_classes
 
         # initialize the custom embedding layer using the parameters from constructor
         self.embed = AnoBertEmbeddingLayer(
@@ -116,6 +126,7 @@ class AnoBert(nn.Module):
             feature_dim=self.feature_dim,
             d_model=self.d_model,
             max_seq_len=self.max_seq_len,
+            num_port_classes=num_port_classes,
         )
 
         # standard transformer encoder block
@@ -134,7 +145,8 @@ class AnoBert(nn.Module):
         self.reconstruction_continuous = nn.Linear(
             self.d_model, self.num_continuous_features
         )  # Output size: 13
-        self.reconstruction_port = nn.Linear(self.d_model, 65537)  # Logits for 65536 ports + Mask
+        # Logits for num_port_classes-1 quantized port classes + the mask/pad sentinel
+        self.reconstruction_port = nn.Linear(self.d_model, num_port_classes)
         self.reconstruction_proto = nn.Linear(self.d_model, 257)  # Logits for 256 protocols + Mask
 
     def forward(
@@ -163,7 +175,7 @@ class AnoBert(nn.Module):
 
         # 3. Pure mathematical mapping out to specialized target distributions
         out_continuous = self.reconstruction_continuous(context_vectors)  # Shape: [B, S, 13]
-        out_port = self.reconstruction_port(context_vectors)  # Shape: [B, S, 65537]
         out_proto = self.reconstruction_proto(context_vectors)  # Shape: [B, S, 257]
+        out_port = self.reconstruction_port(context_vectors)  # Shape: [B, S, 65537]
 
         return out_continuous, out_proto, out_port

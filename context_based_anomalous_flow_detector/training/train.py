@@ -6,11 +6,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from context_based_anomalous_flow_detector.modeling.anobert import AnoBert
-from context_based_anomalous_flow_detector.schema import (
-    CONT_PAD_VALUE,
-    PORT_PAD_VALUE,
-    PROTO_PAD_VALUE,
-)
+from context_based_anomalous_flow_detector.schema import CONT_PAD_VALUE, PROTO_PAD_VALUE
 
 
 def train_step(
@@ -24,6 +20,10 @@ def train_step(
 
     device = next(model.parameters()).device
     cont_batch, proto_batch, port_batch, attn_mask_batch = [b.to(device) for b in batch]
+    # Mask/pad sentinel is one past the model's last real port class -- reading it off
+    # the model instance (rather than a fixed schema constant) means it can never
+    # desync from whatever port vocab size this particular model was built with.
+    port_pad_value = model.embed.port_dst_embedding.num_embeddings - 1
 
     batch_size, seq_len, _ = cont_batch.shape
 
@@ -47,7 +47,7 @@ def train_step(
 
     masked_cont_batch[mask] = CONT_PAD_VALUE
     masked_proto_batch[mask] = PROTO_PAD_VALUE
-    masked_port_batch[mask] = PORT_PAD_VALUE
+    masked_port_batch[mask] = port_pad_value
 
     pred_cont, pred_proto, pred_port = model(
         masked_cont_batch,
@@ -84,6 +84,7 @@ def eval_step(
     """Masked-token-prediction loss on a batch, no gradient computation."""
     device = next(model.parameters()).device
     cont_batch, proto_batch, port_batch, attn_mask_batch = [b.to(device) for b in batch]
+    port_pad_value = model.embed.port_dst_embedding.num_embeddings - 1
 
     batch_size, seq_len, _ = cont_batch.shape
     real = ~attn_mask_batch
@@ -99,7 +100,7 @@ def eval_step(
     masked_port_batch = port_batch.clone()
     masked_cont_batch[mask] = CONT_PAD_VALUE
     masked_proto_batch[mask] = PROTO_PAD_VALUE
-    masked_port_batch[mask] = PORT_PAD_VALUE
+    masked_port_batch[mask] = port_pad_value
 
     pred_cont, pred_proto, pred_port = model(
         masked_cont_batch, masked_proto_batch, masked_port_batch,
@@ -121,6 +122,7 @@ def train_model(
     eval_dataloader: DataLoader,
     params: "TrainingParams",
     seq_len: int,
+    num_port_classes: int,
     device: torch.device,
     patience: int = 5,
     min_delta: float = 1e-4,
@@ -130,6 +132,11 @@ def train_model(
     epoch_offset: int = 0,
 ) -> tuple[nn.Module, dict[str, Any]]:
     """Train an AnoBert model. No file I/O — caller handles persistence.
+
+    `num_port_classes` sizes the port embedding/output head to match whatever the
+    preprocessing stage's port quantization produced (see schema.port_vocab_size);
+    it's passed in explicitly (like `seq_len`) rather than read off `params`, since
+    it's a property of the preprocessed data, not a training hyperparameter.
 
     Pass `initial_state_dict` (with its `initial_best_eval_loss`/`initial_best_epoch`)
     to warm-start from a previously trained checkpoint instead of a random init.
@@ -145,6 +152,7 @@ def train_model(
         nhead=params.n_heads,
         num_layers=params.num_layers,
         max_seq_len=seq_len,
+        num_port_classes=num_port_classes,
     ).to(device)
     if initial_state_dict is not None:
         model.load_state_dict(initial_state_dict)

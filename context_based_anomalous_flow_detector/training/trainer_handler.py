@@ -18,7 +18,7 @@ from context_based_anomalous_flow_detector.data_processing._manifest import (
 )
 from context_based_anomalous_flow_detector.modeling.anobert import AnoBert
 from context_based_anomalous_flow_detector.paths import BASE_DATA_PATH, TRAINED_MODELS_DIR
-from context_based_anomalous_flow_detector.schema import now_iso
+from context_based_anomalous_flow_detector.schema import now_iso, port_vocab_size
 from context_based_anomalous_flow_detector.training.train import train_model
 
 
@@ -130,6 +130,9 @@ class TrainerHandler:
 
         splits = torch.load(tensors_path, map_location="cpu", weights_only=True)
         seq_len = preprocess_manifest["preprocess_params"]["seq_len"]
+        # +1 for the mask/pad sentinel on top of the real quantized port classes
+        # (port_top_k explicit ports + 3 IANA range buckets, see schema.port_vocab_size).
+        num_port_classes = port_vocab_size(preprocess_manifest["preprocess_params"]["port_top_k"]) + 1
 
         train_cont, train_proto, train_port, train_mask = (
             splits["train"][k] for k in ("cont", "proto", "port", "mask")
@@ -154,6 +157,7 @@ class TrainerHandler:
             eval_dataloader,
             params,
             seq_len,
+            num_port_classes,
             device,
             initial_state_dict=initial_state_dict,
             initial_best_eval_loss=initial_best_eval_loss,
@@ -216,6 +220,7 @@ def load_trained_model(
     manifest = read_manifest(target_dir)
     training_params = TrainingParams.from_dict(manifest["training_params"])
     seq_len = manifest["input"]["preprocess_params"]["seq_len"]
+    num_port_classes = port_vocab_size(manifest["input"]["preprocess_params"]["port_top_k"]) + 1
 
     model = AnoBert(
         num_continuous_features=training_params.num_cont_features,
@@ -223,6 +228,7 @@ def load_trained_model(
         nhead=training_params.n_heads,
         num_layers=training_params.num_layers,
         max_seq_len=seq_len,
+        num_port_classes=num_port_classes,
     )
     state_dict = torch.load(
         target_dir / manifest["output_file"], map_location=map_location, weights_only=True

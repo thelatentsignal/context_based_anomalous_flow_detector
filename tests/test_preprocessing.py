@@ -6,16 +6,20 @@ import torch
 from context_based_anomalous_flow_detector.data_processing.preprocessing import (
     PreprocessParams,
     _build_sequence_tensors,
+    build_port_vocab,
     chronological_split,
     featurize,
     preprocess_to_tensors,
+    quantize_port,
     sort_flows,
 )
 from context_based_anomalous_flow_detector.schema import (
     CONT_PAD_VALUE,
     LABEL_PAD_VALUE,
-    PORT_PAD_VALUE,
+    PORT_REGISTERED_MAX,
+    PORT_WELL_KNOWN_MAX,
     PROTO_PAD_VALUE,
+    port_vocab_size,
 )
 
 
@@ -174,7 +178,8 @@ def test_build_sequence_tensors_pads_leftover_with_sentinels():
     assert mask.tolist() == [[False, False, True, True]]
     assert proto[0, :2].tolist() == [1, 1]
     assert proto[0, 2:].tolist() == [PROTO_PAD_VALUE, PROTO_PAD_VALUE]
-    assert port[0, 2:].tolist() == [PORT_PAD_VALUE, PORT_PAD_VALUE]
+    expected_port_pad = port_vocab_size(params.port_top_k)
+    assert port[0, 2:].tolist() == [expected_port_pad, expected_port_pad]
     assert torch.allclose(cont[0, 2:], torch.full((2, cont.shape[2]), CONT_PAD_VALUE))
     assert label[0, :2].tolist() == [1, 0]
     assert label[0, 2:].tolist() == [LABEL_PAD_VALUE, LABEL_PAD_VALUE]
@@ -200,6 +205,62 @@ def test_build_sequence_tensors_label_stays_aligned_with_cont():
     bytes_in_col = 0  # first entry of CONT_COLS
     encoded_label = (cont[..., bytes_in_col] > 0).long()
     assert torch.equal(encoded_label[real], label[real])
+
+
+def test_build_port_vocab_ranks_by_frequency_then_port_number():
+    """Top-k ports are picked by descending frequency; equal-frequency ports are
+    ordered by port number so the mapping is deterministic run to run."""
+    # port 80 appears 3x, port 443 appears 2x, ports 22/53 appear 1x each (tied).
+    train_df = pd.DataFrame(
+        {"portdst": [80, 80, 80, 443, 443, 22, 53]}
+    )
+    vocab = build_port_vocab(train_df, port_top_k=3)
+
+    assert vocab == {80: 0, 443: 1, 22: 2}  # tie between 22/53 broken by port number
+
+
+def test_quantize_port_keeps_top_k_ports_as_own_class():
+    vocab = {80: 0, 443: 1}
+    quantized = quantize_port(pd.Series([80, 443, 80]), vocab, port_top_k=2)
+    assert quantized.tolist() == [0, 1, 0]
+
+
+def test_quantize_port_buckets_ports_outside_top_k_by_iana_range():
+    """A port not in the fitted vocab falls back to one of the 3 IANA range buckets,
+    placed right after the port_top_k explicit classes (port_top_k + 0/1/2)."""
+    vocab = {80: 0}  # only port 80 got an explicit class
+    port_top_k = 1
+    raw_ports = pd.Series(
+        [
+            80,  # explicit class
+            PORT_WELL_KNOWN_MAX,  # top of well-known range -> bucket 0
+            PORT_WELL_KNOWN_MAX + 1,  # bottom of registered range -> bucket 1
+            PORT_REGISTERED_MAX,  # top of registered range -> bucket 1
+            PORT_REGISTERED_MAX + 1,  # bottom of dynamic/ephemeral range -> bucket 2
+        ]
+    )
+    quantized = quantize_port(raw_ports, vocab, port_top_k)
+    assert quantized.tolist() == [0, port_top_k + 0, port_top_k + 1, port_top_k + 1, port_top_k + 2]
+
+
+def test_preprocess_to_tensors_fits_port_vocab_on_train_split_only():
+    """Regression guard against leakage: a port that's frequent in eval/test but
+    absent from train must NOT get its own class -- it should fall back to an IANA
+    range bucket like any other port train never saw."""
+    ephemeral_port = 60000  # > PORT_REGISTERED_MAX (49151) -> dynamic/ephemeral bucket
+    # Chronological split puts early timestamps in train; ephemeral_port only ever
+    # appears late (test split), port 80 only appears early (train split).
+    rows = [_flow("A", t, portdst=80) for t in range(70)]
+    rows += [_flow("A", t, portdst=ephemeral_port) for t in range(70, 100)]
+    df = pd.DataFrame(rows)
+    params = _params(seq_len=100, port_top_k=5)  # 1 host group -> whole df as one sequence
+    result = preprocess_to_tensors(df, params)
+
+    # ephemeral_port never appeared in train, so it must land in the dynamic/ephemeral
+    # range bucket (port_top_k + 2), not get a dedicated top-k class.
+    test_ports = result["test"]["port"][~result["test"]["mask"]]
+    assert test_ports.numel() > 0
+    assert torch.all(test_ports == params.port_top_k + 2)
 
 
 def test_preprocess_to_tensors_end_to_end_shape_and_keys():

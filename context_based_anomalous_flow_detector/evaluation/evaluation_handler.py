@@ -18,9 +18,9 @@ from context_based_anomalous_flow_detector.modeling.anobert import AnoBert
 from context_based_anomalous_flow_detector.paths import BASE_DATA_PATH, TRAINED_MODELS_DIR
 from context_based_anomalous_flow_detector.schema import (
     CONT_PAD_VALUE,
-    PORT_PAD_VALUE,
     PROTO_PAD_VALUE,
     now_iso,
+    port_vocab_size,
 )
 
 
@@ -143,12 +143,14 @@ class EvaluationHandler:
         device: torch.device,
     ) -> AnoBert:
         model_cfg = training_manifest["training_params"]["model"]
+        port_top_k = training_manifest["input"]["preprocess_params"]["port_top_k"]
         model = AnoBert(
             num_continuous_features=model_cfg["num_cont_features"],
             d_model=model_cfg["d_model"],
             nhead=model_cfg["n_heads"],
             num_layers=model_cfg["num_layers"],
             max_seq_len=seq_len,
+            num_port_classes=port_vocab_size(port_top_k) + 1,
         )
         state_dict = torch.load(model_dir / "model.pt", map_location="cpu", weights_only=True)
         model.load_state_dict(state_dict)
@@ -164,6 +166,7 @@ class EvaluationHandler:
         params: EvalParams,
     ) -> dict[str, Any]:
         device = next(model.parameters()).device
+        port_pad_value = model.embed.port_dst_embedding.num_embeddings - 1
 
         # Majority-class baselines, computed over real (non-padded) train tokens.
         train_real = ~train_split["mask"]
@@ -187,7 +190,7 @@ class EvaluationHandler:
                 cont, proto, port, attn_mask = [b.to(device) for b in batch]
 
                 masked_cont, masked_proto, masked_port, mask = self._mask_tokens(
-                    cont, proto, port, attn_mask, params.mask_ratio, device
+                    cont, proto, port, attn_mask, params.mask_ratio, device, port_pad_value
                 )
 
                 if not mask.any():
@@ -264,6 +267,7 @@ class EvaluationHandler:
         attn_mask: torch.Tensor,
         mask_ratio: float,
         device: torch.device,
+        port_pad_value: int,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Mask a random fraction of real positions, using the same scheme as training."""
         batch_size, seq_len, _ = cont.shape
@@ -275,7 +279,7 @@ class EvaluationHandler:
         masked_proto = proto.clone()
         masked_proto[mask] = PROTO_PAD_VALUE
         masked_port = port.clone()
-        masked_port[mask] = PORT_PAD_VALUE
+        masked_port[mask] = port_pad_value
 
         return masked_cont, masked_proto, masked_port, mask
 

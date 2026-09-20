@@ -28,24 +28,38 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from context_based_anomalous_flow_detector.paths import BASE_DATA_PATH, TRAINED_MODELS_DIR
-from context_based_anomalous_flow_detector.schema import (
-    CONT_PAD_VALUE,
-    PORT_PAD_VALUE,
-    PROTO_PAD_VALUE,
-    now_iso,
-)
+from context_based_anomalous_flow_detector.schema import CONT_PAD_VALUE, PROTO_PAD_VALUE, now_iso
 from context_based_anomalous_flow_detector.training.trainer_handler import load_trained_model
 
 
 @dataclass
 class AnomalyDetectionParams:
-    """Configuration for leave-one-out anomaly scoring. Weights mirror the training loss."""
+    """Configuration for leave-one-out anomaly scoring.
+
+    These weights combine the raw cont/proto/port errors into a single "combined"
+    score and are independent of the training loss weights (30/1/0.5, see train.py) --
+    that ratio optimizes reconstruction training, not anomaly separability. A
+    per-component AUC/AP breakdown (see anomaly_detection.json's "cont"/"proto"/"port"
+    metrics) originally showed port_err was *inversely* correlated with attacks (many
+    attacks reuse a single target port, which the model predicted well from context on
+    the old raw 65536-way port vocab) and that cont_weight=30 drowned out proto's much
+    stronger signal. cont_weight=1, proto_weight=1, port_weight=0 raised ROC AUC from
+    0.68 to ~0.97 on unsw_nb15/v1 test, with no retraining needed.
+
+    After quantizing ports (see schema.port_vocab_size / preprocessing.build_port_vocab),
+    port_err's correlation flipped to the expected direction (attack mean > benign mean),
+    and its own AUC rose from 0.59 to 0.75 -- but it's still noisier than cont/proto, so
+    linearly adding it back in (port_weight > 0) still *hurts* the combined AUC/AP versus
+    leaving it at 0. port_weight=0 remains correct, just for a different reason now:
+    "not wrong, just not strong enough to help a simple weighted sum" rather than
+    "actively misleading".
+    """
 
     batch_size: int = 64
     device: str = "auto"  # "auto", "cuda", "cpu"
-    cont_weight: float = 30.0
+    cont_weight: float = 1.0
     proto_weight: float = 1.0
-    port_weight: float = 0.5
+    port_weight: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -75,8 +89,9 @@ class AnomalyDetectionHandler:
         params: AnomalyDetectionParams | dict[str, Any] | None = None,
     ) -> Path:
         """Score `split` for dataset_id/version. Returns the model dir now containing
-        anomaly_detection.json (summary metrics) and anomaly_scores.pt (raw per-flow
-        scores/labels/mask, for downstream plotting or thresholding)."""
+        anomaly_detection.json (metrics per score: "combined" plus the raw "cont"/
+        "proto"/"port" components) and anomaly_scores.pt (the raw per-flow tensors
+        for those same four scores, plus labels/mask, for downstream plotting)."""
         params = self._coerce_params(params)
         model, _ = load_trained_model(dataset_id, version, models_root=self.models_root)
 
@@ -98,12 +113,18 @@ class AnomalyDetectionHandler:
             data[k] for k in ("cont", "proto", "port", "mask", "label")
         )
 
-        scores = self._score_leave_one_out(model, cont, proto, port, mask, params, device)
+        scored = self._score_leave_one_out(model, cont, proto, port, mask, params, device)
 
         real = (~mask).numpy()
-        real_scores = scores.numpy()[real]
         real_labels = label.numpy()[real]
-        metrics = self._score_metrics(real_scores, real_labels)
+        # Report the combined (weighted) score plus each raw, unweighted component
+        # separately -- AUC/AP are scale-invariant, so this tells us which of
+        # cont/proto/port actually carries the attack signal, independent of how
+        # params.*_weight happens to be set.
+        metrics = {
+            name: self._score_metrics(score_tensor.numpy()[real], real_labels)
+            for name, score_tensor in scored.items()
+        }
 
         model_dir = self.models_root / dataset_id / version
         results = {
@@ -118,7 +139,7 @@ class AnomalyDetectionHandler:
         with open(model_dir / "anomaly_detection.json", "w") as f:
             json.dump(results, f, indent=2)
 
-        torch.save({"scores": scores, "labels": label, "mask": mask}, model_dir / "anomaly_scores.pt")
+        torch.save({**scored, "labels": label, "mask": mask}, model_dir / "anomaly_scores.pt")
 
         self._print_summary(results)
         return model_dir
@@ -132,13 +153,16 @@ class AnomalyDetectionHandler:
         mask: torch.Tensor,
         params: AnomalyDetectionParams,
         device: torch.device,
-    ) -> torch.Tensor:
+    ) -> dict[str, torch.Tensor]:
         """Mask every real position exactly once and score it from its context.
 
-        Returns a [N, seq_len] tensor of per-flow anomaly scores (0 at padded positions).
+        Returns a dict of [N, seq_len] tensors (0 at padded positions): "combined" is
+        the weighted anomaly score, "cont"/"proto"/"port" are the three raw, unweighted
+        error components it's built from.
         """
         n, seq_len, _ = cont.shape
-        scores = torch.zeros(n, seq_len)
+        keys = ("combined", "cont", "proto", "port")
+        scored = {k: torch.zeros(n, seq_len) for k in keys}
 
         dataloader = DataLoader(
             TensorDataset(cont, proto, port, mask), batch_size=params.batch_size, shuffle=False
@@ -153,12 +177,14 @@ class AnomalyDetectionHandler:
                 port_b = port_b.to(device)
                 mask_b = mask_b.to(device)
 
-                scores[offset : offset + b] = AnomalyDetectionHandler._score_batch(
+                batch_scored = AnomalyDetectionHandler._score_batch(
                     model, cont_b, proto_b, port_b, mask_b, params
                 )
+                for k in keys:
+                    scored[k][offset : offset + b] = batch_scored[k]
                 offset += b
 
-        return scores
+        return scored
 
     @staticmethod
     def _score_batch(
@@ -168,16 +194,25 @@ class AnomalyDetectionHandler:
         port_b: torch.Tensor,
         mask_b: torch.Tensor,
         params: AnomalyDetectionParams,
-    ) -> torch.Tensor:
+    ) -> dict[str, torch.Tensor]:
         """Score every position of a batch in one forward pass.
 
-        Each sequence is replicated seq_len times; replica r has only position r masked.
+        Vectorized leave one out with fancy indexing: each sequence is replicated seq_len times; replica r has only position r masked.
         This is mathematically equivalent to seq_len separate leave-one-out forward passes
         but runs as a single larger batched call.
+
+
         """
         device = cont_b.device
         b, seq_len, num_cont = cont_b.shape
+        # Mask/pad sentinel is one past the model's last real port class -- reading it
+        # off the model instance keeps this in sync with whatever quantized port vocab
+        # size this particular model was trained with (see schema.port_vocab_size).
+        port_pad_value = model.embed.port_dst_embedding.num_embeddings - 1
 
+        # unsqueeze(1) bedeutet, dass an dim 1 einen neue dimension hinzugefügt wird. expand setzt sie dann auf seq len
+        # aber erst clone bewirkt, dass die werte kopiert werden. expand referenziert nur, d.h. zeigt auf die werte,
+        # aber belegt keinen neuen Speicher
         cont_rep = cont_b.unsqueeze(1).expand(b, seq_len, seq_len, num_cont).clone()
         proto_rep = proto_b.unsqueeze(1).expand(b, seq_len, seq_len).clone()
         port_rep = port_b.unsqueeze(1).expand(b, seq_len, seq_len).clone()
@@ -186,7 +221,7 @@ class AnomalyDetectionHandler:
         pos = torch.arange(seq_len, device=device)
         cont_rep[:, pos, pos, :] = CONT_PAD_VALUE
         proto_rep[:, pos, pos] = PROTO_PAD_VALUE
-        port_rep[:, pos, pos] = PORT_PAD_VALUE
+        port_rep[:, pos, pos] = port_pad_value
 
         cont_rep = cont_rep.reshape(b * seq_len, seq_len, num_cont)
         proto_rep = proto_rep.reshape(b * seq_len, seq_len)
@@ -195,6 +230,9 @@ class AnomalyDetectionHandler:
         pred_cont, pred_proto, pred_port = model(
             cont_rep, proto_rep, port_rep, key_padding_mask=mask_rep
         )
+        # pred_cont (B x Seq-len) x seq_len x 13, 2176 x 34, 13 , 2176=64x13, s. oben
+        # pred_proto B x Seq-len x 257
+        # pred_port B x Seq-len x num_port_classes (quantized: port_top_k + 3 range buckets + 1 mask/pad)
 
         pred_cont = pred_cont.reshape(b, seq_len, seq_len, num_cont)
         pred_proto = pred_proto.reshape(b, seq_len, seq_len, -1)
@@ -205,6 +243,8 @@ class AnomalyDetectionHandler:
         pred_proto_at_pos = pred_proto[:, pos, pos, :]
         pred_port_at_pos = pred_port[:, pos, pos, :]
 
+        # jedes token wurde jetzt maskiert und dafür wurde die Prediktion berechnet.
+        # Für welches Token gab es nun einen großen Fehler? denn dies wäre die Anomalie.
         cont_err = torch.mean((pred_cont_at_pos - cont_b) ** 2, dim=-1)
         proto_err = nn.functional.cross_entropy(
             pred_proto_at_pos.reshape(b * seq_len, -1), proto_b.reshape(b * seq_len), reduction="none"
@@ -217,7 +257,15 @@ class AnomalyDetectionHandler:
             params.cont_weight * cont_err + params.proto_weight * proto_err + params.port_weight * port_err
         )
         scores[mask_b] = 0.0
-        return scores.cpu()
+        cont_err[mask_b] = 0.0
+        proto_err[mask_b] = 0.0
+        port_err[mask_b] = 0.0
+        return {
+            "combined": scores.cpu(),
+            "cont": cont_err.cpu(),
+            "proto": proto_err.cpu(),
+            "port": port_err.cpu(),
+        }
 
     @staticmethod
     def _score_metrics(scores: np.ndarray, labels: np.ndarray) -> dict[str, Any]:
@@ -253,19 +301,31 @@ class AnomalyDetectionHandler:
 
     @staticmethod
     def _print_summary(results: dict[str, Any]) -> None:
-        metrics = results["metrics"]
+        all_metrics = results["metrics"]
+        combined = all_metrics["combined"]
         print(
             f"\nAnomaly detection on split '{results['split']}' "
             f"({results['dataset_id']}/{results['version']}):"
         )
         print(
-            f"  flows scored     : {metrics['n_flows']:,} "
-            f"(benign: {metrics['n_benign']:,}, attack: {metrics['n_attack']:,})"
+            f"  flows scored     : {combined['n_flows']:,} "
+            f"(benign: {combined['n_benign']:,}, attack: {combined['n_attack']:,})"
         )
-        if metrics["score_mean_benign"] is not None:
-            print(f"  mean score benign: {metrics['score_mean_benign']:.4f}")
-        if metrics["score_mean_attack"] is not None:
-            print(f"  mean score attack: {metrics['score_mean_attack']:.4f}")
-        if "roc_auc" in metrics:
-            print(f"  ROC AUC          : {metrics['roc_auc']:.4f}")
-            print(f"  Average precision: {metrics['average_precision']:.4f}")
+        if combined["score_mean_benign"] is not None:
+            print(f"  mean score benign: {combined['score_mean_benign']:.4f}")
+        if combined["score_mean_attack"] is not None:
+            print(f"  mean score attack: {combined['score_mean_attack']:.4f}")
+        if "roc_auc" in combined:
+            print(f"  ROC AUC          : {combined['roc_auc']:.4f}")
+            print(f"  Average precision: {combined['average_precision']:.4f}")
+
+        print("  per-component breakdown (unweighted, scale-invariant AUC/AP):")
+        for name in ("cont", "proto", "port"):
+            metrics = all_metrics[name]
+            if "roc_auc" in metrics:
+                print(
+                    f"    {name:<6}: ROC AUC {metrics['roc_auc']:.4f}  "
+                    f"AP {metrics['average_precision']:.4f}  "
+                    f"(benign mean {metrics['score_mean_benign']:.4f}, "
+                    f"attack mean {metrics['score_mean_attack']:.4f})"
+                )

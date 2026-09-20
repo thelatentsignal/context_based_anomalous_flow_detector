@@ -11,8 +11,9 @@ from context_based_anomalous_flow_detector.schema import (
     CONT_COLS,
     CONT_PAD_VALUE,
     LABEL_PAD_VALUE,
-    PORT_PAD_VALUE,
     PROTO_PAD_VALUE,
+    port_range_bucket,
+    port_vocab_size,
 )
 pd.options.mode.copy_on_write = True
 
@@ -29,6 +30,11 @@ class PreprocessParams:
     group_cols: list[str] = field(default_factory=lambda: ["ipsrc"])
     time_col: str = "starttime"
     split: tuple[float, float] = (0.70, 0.85)
+    # How many distinct destination ports keep their own class (see build_port_vocab/
+    # quantize_port below); the coverage curve on unsw_nb15/v1 flattens fast (top 50
+    # covers 68.2% of flows, top 500 only 72.3%), so a few dozen already capture most
+    # of the head, and everything else falls back to a coarse IANA range bucket.
+    port_top_k: int = 50
     # Scaling denominators (dataset-specific, kept here so they are part of config)
     log_div: dict[str, float] = field(
         default_factory=lambda: {
@@ -50,6 +56,7 @@ class PreprocessParams:
             "split": list(self.split),
             "log_div": self.log_div,
             "ttl_max": self.ttl_max,
+            "port_top_k": self.port_top_k,
         }
 
 
@@ -80,6 +87,36 @@ def featurize(sorted_df: pd.DataFrame, params: PreprocessParams) -> pd.DataFrame
     data["proto"] = data["proto"].fillna(0).astype(np.int64)
 
     return data
+
+
+def build_port_vocab(train_df: pd.DataFrame, port_top_k: int) -> dict[int, int]:
+    """Fit the compact port vocabulary on the train split ONLY -- fitting on eval/test
+    too would leak their port-frequency distribution into what's supposed to be an
+    unseen-data evaluation.
+
+    Maps each of the `port_top_k` most frequent destination ports in `train_df` to its
+    own class id (0..port_top_k-1, ranked by descending frequency; ties broken by port
+    number for determinism). Ports not in this dict fall back to an IANA range bucket
+    instead -- see quantize_port.
+    """
+    counts = train_df["portdst"].value_counts().rename("count").reset_index()
+    counts.columns = ["port", "count"]
+    counts = counts.sort_values(["count", "port"], ascending=[False, True])
+    top_ports = counts["port"].head(port_top_k).tolist()
+    return {int(port): rank for rank, port in enumerate(top_ports)}
+
+
+def quantize_port(raw_port: pd.Series, port_vocab: dict[int, int], port_top_k: int) -> pd.Series:
+    """Map raw destination ports (0-65535) to the compact vocabulary fit by
+    build_port_vocab: the top-k most frequent ports keep their own class
+    (0..port_top_k-1), everything else falls into one of the 3 IANA range buckets,
+    placed right after the top-k classes (port_top_k, port_top_k+1, port_top_k+2)."""
+    mapped = raw_port.map(port_vocab)
+    unmapped = mapped.isna()
+    if unmapped.any():
+        buckets = raw_port[unmapped].map(port_range_bucket) + port_top_k
+        mapped = mapped.where(~unmapped, buckets)
+    return mapped.astype(np.int64)
 
 
 def chronological_split(
@@ -159,7 +196,10 @@ def _build_sequence_tensors(
             leftover_df = group_df.iloc[full_rows:]
             cont_pad = torch.full((seq_len, len(CONT_COLS)), CONT_PAD_VALUE, dtype=torch.float32)
             proto_pad = torch.full((seq_len,), PROTO_PAD_VALUE, dtype=torch.long)
-            port_pad = torch.full((seq_len,), PORT_PAD_VALUE, dtype=torch.long)
+            # One past the last real quantized port class (port_top_k explicit ports +
+            # 3 range buckets), mirroring PROTO_PAD_VALUE's "index == class count" convention.
+            port_pad_value = port_vocab_size(params.port_top_k)
+            port_pad = torch.full((seq_len,), port_pad_value, dtype=torch.long)
             mask = torch.full((seq_len,), True, dtype=torch.bool)
             label_pad = torch.full((seq_len,), LABEL_PAD_VALUE, dtype=torch.long)
 
@@ -197,6 +237,14 @@ def preprocess_to_tensors(
     sorted_df = sort_flows(data, params)
     featurized = featurize(sorted_df, params)
     splits = chronological_split(featurized, params)
+
+    # Fit the port vocabulary on "train" only, then apply that same fitted mapping to
+    # every split -- see build_port_vocab's docstring for why (avoids leaking eval/test
+    # port frequencies into what should be an unseen-data evaluation).
+    port_vocab = build_port_vocab(splits["train"], params.port_top_k)
+    for split_df in splits.values():
+        split_df["portdst"] = quantize_port(split_df["portdst"], port_vocab, params.port_top_k)
+
     return {
         name: dict(
             zip(

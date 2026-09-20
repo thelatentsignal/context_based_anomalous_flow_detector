@@ -16,7 +16,7 @@ from context_based_anomalous_flow_detector.evaluation.anomaly_detection_handler 
     AnomalyDetectionParams,
 )
 from context_based_anomalous_flow_detector.modeling.anobert import AnoBert
-from context_based_anomalous_flow_detector.schema import CONT_PAD_VALUE, PORT_PAD_VALUE, PROTO_PAD_VALUE
+from context_based_anomalous_flow_detector.schema import CONT_PAD_VALUE, PROTO_PAD_VALUE
 from context_based_anomalous_flow_detector.training.trainer_handler import TrainerHandler, TrainingParams
 
 DATASET_ID = "synthetic"
@@ -28,11 +28,12 @@ def _tiny_model(seq_len: int = 6) -> AnoBert:
     return AnoBert(num_continuous_features=13, d_model=16, nhead=2, num_layers=1, max_seq_len=seq_len)
 
 
-def _naive_leave_one_out(model, cont_b, proto_b, port_b, mask_b, params) -> torch.Tensor:
+def _naive_leave_one_out(model, cont_b, proto_b, port_b, mask_b, params) -> dict[str, torch.Tensor]:
     """Reference implementation: one forward pass per position, no vectorization trick.
     Used to cross-check the fast, diagonal-indexed AnomalyDetectionHandler._score_batch."""
     b, seq_len, _ = cont_b.shape
-    scores = torch.zeros(b, seq_len)
+    port_pad_value = model.embed.port_dst_embedding.num_embeddings - 1
+    scored = {k: torch.zeros(b, seq_len) for k in ("combined", "cont", "proto", "port")}
     with torch.no_grad():
         for pos in range(seq_len):
             masked_cont = cont_b.clone()
@@ -40,7 +41,7 @@ def _naive_leave_one_out(model, cont_b, proto_b, port_b, mask_b, params) -> torc
             masked_port = port_b.clone()
             masked_cont[:, pos, :] = CONT_PAD_VALUE
             masked_proto[:, pos] = PROTO_PAD_VALUE
-            masked_port[:, pos] = PORT_PAD_VALUE
+            masked_port[:, pos] = port_pad_value
 
             pred_cont, pred_proto, pred_port = model(
                 masked_cont, masked_proto, masked_port, key_padding_mask=mask_b
@@ -53,13 +54,17 @@ def _naive_leave_one_out(model, cont_b, proto_b, port_b, mask_b, params) -> torc
             port_err = nn.functional.cross_entropy(
                 pred_port[:, pos, :], port_b[:, pos], reduction="none"
             )
-            scores[:, pos] = (
+            scored["cont"][:, pos] = cont_err
+            scored["proto"][:, pos] = proto_err
+            scored["port"][:, pos] = port_err
+            scored["combined"][:, pos] = (
                 params.cont_weight * cont_err
                 + params.proto_weight * proto_err
                 + params.port_weight * port_err
             )
-    scores[mask_b] = 0.0
-    return scores
+    for k in scored:
+        scored[k][mask_b] = 0.0
+    return scored
 
 
 def test_score_batch_matches_naive_per_position_loop():
@@ -84,7 +89,8 @@ def test_score_batch_matches_naive_per_position_loop():
     fast = AnomalyDetectionHandler._score_batch(model, cont_b, proto_b, port_b, mask_b, params)
     naive = _naive_leave_one_out(model, cont_b, proto_b, port_b, mask_b, params)
 
-    assert torch.allclose(fast, naive, atol=1e-5)
+    for key in ("combined", "cont", "proto", "port"):
+        assert torch.allclose(fast[key], naive[key], atol=1e-5), key
 
 
 def test_score_batch_zeroes_out_padded_positions():
@@ -98,11 +104,12 @@ def test_score_batch_zeroes_out_padded_positions():
     mask_b = torch.zeros(2, seq_len, dtype=torch.bool)
     mask_b[:, 3:] = True
 
-    scores = AnomalyDetectionHandler._score_batch(
+    scored = AnomalyDetectionHandler._score_batch(
         model, cont_b, proto_b, port_b, mask_b, AnomalyDetectionParams()
     )
-    assert torch.all(scores[mask_b] == 0.0)
-    assert torch.all(scores[~mask_b] != 0.0)
+    for key in ("combined", "cont", "proto", "port"):
+        assert torch.all(scored[key][mask_b] == 0.0), key
+        assert torch.all(scored[key][~mask_b] != 0.0), key
 
 
 def _write_synthetic_preprocessed(base_path: Path, n: int, seq_len: int, rng) -> None:
@@ -161,9 +168,10 @@ def test_run_writes_results_with_expected_shapes(detector_and_dirs):
     assert (model_dir / "anomaly_scores.pt").exists()
 
     blob = torch.load(model_dir / "anomaly_scores.pt", weights_only=True)
-    assert blob["scores"].shape == blob["labels"].shape == blob["mask"].shape
-    # Padded positions must score exactly 0.
-    assert torch.all(blob["scores"][blob["mask"]] == 0.0)
+    for key in ("combined", "cont", "proto", "port"):
+        assert blob[key].shape == blob["labels"].shape == blob["mask"].shape
+        # Padded positions must score exactly 0.
+        assert torch.all(blob[key][blob["mask"]] == 0.0)
 
 
 def test_metrics_omit_auc_when_only_one_class_present(tmp_path: Path):
@@ -213,5 +221,6 @@ def test_metrics_omit_auc_when_only_one_class_present(tmp_path: Path):
 
     with open(model_dir / "anomaly_detection.json") as f:
         results = json.load(f)
-    assert "roc_auc" not in results["metrics"]
-    assert results["metrics"]["n_attack"] == 0
+    for key in ("combined", "cont", "proto", "port"):
+        assert "roc_auc" not in results["metrics"][key]
+        assert results["metrics"][key]["n_attack"] == 0
