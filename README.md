@@ -1,25 +1,22 @@
-In this project I want to create my own flow-classifier. I want to use ip-octet encoding.
-Idea: a batch of flows are trained with a bert-style transformer. I learn a cls token with
- contrastive learning that describes the batch. Now I want to compare this to another 
-batch where one or more flows look odd in their combination and the cls token will therefore
-not be similar to one that has been learned before.
-
-The first step is to create a representation of the batch of flows. What is
-a representation for one flow? What is a representation for an IP address?
-
-Ok - I realize all this is really complex and I should start with something simpler, debuggable.
-So - I will start with SINGLE Flows and learn a cls token for a single flow. This way I will be
-able to detect software that is wrong, e.g. flows where an unusual port is used together with
-a certain ip or protocol etc.
 
 # Installation Instructions
 2. **Clone the repository:**
+
 1) clone repos
 2) create new conda env and activate it with python >=3.12:
    a) 'conda create -n context_based_anomalous_flow_detector python=3.12'
    b) conda activate context_based_anomalous_flow_detector
-3) pip install -e .
-4) in the empty data folder download the nf-unswb-nb15-v3 dataset and place the file
+2) OR use venv
+   a) python3 -m venv .venv_context_based_anom
+   b) source .venv_context_based_anom/bin/activate 
+3) Udpate pip:
+   python -m pip install -U pip
+4) Install project in editable mode:
+   pip install -e .
+5) create and install the ipykernel for the notebook:
+   a) python -m pip install ipykernel
+   b) python -m ipykernel install --user --name context_based_anomalous_flow_detector --display-name "Python (context_based_anomalous_flow_detector)"
+6) in the empty data folder download the nf-unswb-nb15-v3 dataset and place the file
 NF-UNSW-NB15-v3.csv directly into data. Rename to NF-UNSW-NB15-v3_raw.csv
 
 

@@ -16,9 +16,6 @@ PYTHON_INTERPRETER = python
 requirements:
 	$(PYTHON_INTERPRETER) -m pip install -U pip
 	$(PYTHON_INTERPRETER) -m pip install -e ".[dev]"
-	
-
-
 
 ## Delete all compiled Python files
 .PHONY: clean
@@ -38,8 +35,6 @@ lint:
 format:
 	ruff check --fix
 	ruff format
-
-
 
 ## Run tests
 .PHONY: test

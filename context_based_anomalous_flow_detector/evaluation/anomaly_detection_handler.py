@@ -247,14 +247,20 @@ class AnomalyDetectionHandler:
         # Für welches Token gab es nun einen großen Fehler? denn dies wäre die Anomalie.
         cont_err = torch.mean((pred_cont_at_pos - cont_b) ** 2, dim=-1)
         proto_err = nn.functional.cross_entropy(
-            pred_proto_at_pos.reshape(b * seq_len, -1), proto_b.reshape(b * seq_len), reduction="none"
+            pred_proto_at_pos.reshape(b * seq_len, -1),
+            proto_b.reshape(b * seq_len),
+            reduction="none",
         ).reshape(b, seq_len)
         port_err = nn.functional.cross_entropy(
-            pred_port_at_pos.reshape(b * seq_len, -1), port_b.reshape(b * seq_len), reduction="none"
+            pred_port_at_pos.reshape(b * seq_len, -1),
+            port_b.reshape(b * seq_len),
+            reduction="none",
         ).reshape(b, seq_len)
 
         scores = (
-            params.cont_weight * cont_err + params.proto_weight * proto_err + params.port_weight * port_err
+            params.cont_weight * cont_err
+            + params.proto_weight * proto_err
+            + params.port_weight * port_err
         )
         scores[mask_b] = 0.0
         cont_err[mask_b] = 0.0

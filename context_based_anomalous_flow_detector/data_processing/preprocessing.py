@@ -15,6 +15,7 @@ from context_based_anomalous_flow_detector.schema import (
     port_range_bucket,
     port_vocab_size,
 )
+
 pd.options.mode.copy_on_write = True
 
 
@@ -187,9 +188,7 @@ def _build_sequence_tensors(
             )
             all_mask.append(torch.zeros((n_full, seq_len), dtype=torch.bool))
             all_label.append(
-                torch.from_numpy(full_df["label"].values.astype(np.int64)).reshape(
-                    n_full, seq_len
-                )
+                torch.from_numpy(full_df["label"].values.astype(np.int64)).reshape(n_full, seq_len)
             )
 
         if left_overs > 0:
@@ -211,9 +210,7 @@ def _build_sequence_tensors(
                 leftover_df["portdst"].values.astype(np.int64)
             )
             mask[:left_overs] = False
-            label_pad[:left_overs] = torch.from_numpy(
-                leftover_df["label"].values.astype(np.int64)
-            )
+            label_pad[:left_overs] = torch.from_numpy(leftover_df["label"].values.astype(np.int64))
 
             all_cont.append(cont_pad.unsqueeze(0))
             all_proto.append(proto_pad.unsqueeze(0))

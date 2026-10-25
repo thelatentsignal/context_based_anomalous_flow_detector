@@ -10,7 +10,9 @@ from context_based_anomalous_flow_detector.data_processing.preprocessing import 
     PreprocessParams,
     preprocess_to_tensors,
 )
-from context_based_anomalous_flow_detector.training import trainer_handler as trainer_handler_module
+from context_based_anomalous_flow_detector.training import (
+    trainer_handler as trainer_handler_module,
+)
 from context_based_anomalous_flow_detector.training.trainer_handler import (
     TrainerHandler,
     TrainingParams,
@@ -69,7 +71,12 @@ def trainer(tmp_path: Path) -> TrainerHandler:
 
 def test_training_params_roundtrip_through_dict():
     params = TrainingParams(
-        seed=7, batch_size=32, num_epochs=10, num_cont_features=13, d_model=64, n_heads=8,
+        seed=7,
+        batch_size=32,
+        num_epochs=10,
+        num_cont_features=13,
+        d_model=64,
+        n_heads=8,
         num_layers=3,
     )
     restored = TrainingParams.from_dict(params.to_dict())

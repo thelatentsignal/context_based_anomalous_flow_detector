@@ -211,9 +211,7 @@ def test_build_port_vocab_ranks_by_frequency_then_port_number():
     """Top-k ports are picked by descending frequency; equal-frequency ports are
     ordered by port number so the mapping is deterministic run to run."""
     # port 80 appears 3x, port 443 appears 2x, ports 22/53 appear 1x each (tied).
-    train_df = pd.DataFrame(
-        {"portdst": [80, 80, 80, 443, 443, 22, 53]}
-    )
+    train_df = pd.DataFrame({"portdst": [80, 80, 80, 443, 443, 22, 53]})
     vocab = build_port_vocab(train_df, port_top_k=3)
 
     assert vocab == {80: 0, 443: 1, 22: 2}  # tie between 22/53 broken by port number
@@ -240,7 +238,13 @@ def test_quantize_port_buckets_ports_outside_top_k_by_iana_range():
         ]
     )
     quantized = quantize_port(raw_ports, vocab, port_top_k)
-    assert quantized.tolist() == [0, port_top_k + 0, port_top_k + 1, port_top_k + 1, port_top_k + 2]
+    assert quantized.tolist() == [
+        0,
+        port_top_k + 0,
+        port_top_k + 1,
+        port_top_k + 1,
+        port_top_k + 2,
+    ]
 
 
 def test_preprocess_to_tensors_fits_port_vocab_on_train_split_only():

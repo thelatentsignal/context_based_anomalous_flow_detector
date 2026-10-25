@@ -1,9 +1,8 @@
-from pathlib import Path
 from typing import Any
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader
 
 from context_based_anomalous_flow_detector.modeling.anobert import AnoBert
 from context_based_anomalous_flow_detector.schema import CONT_PAD_VALUE, PROTO_PAD_VALUE
@@ -76,6 +75,7 @@ def _resolve_device(config: dict[str, Any]) -> torch.device:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return torch.device(choice)
 
+
 def eval_step(
     model: torch.nn.Module,
     batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
@@ -103,7 +103,9 @@ def eval_step(
     masked_port_batch[mask] = port_pad_value
 
     pred_cont, pred_proto, pred_port = model(
-        masked_cont_batch, masked_proto_batch, masked_port_batch,
+        masked_cont_batch,
+        masked_proto_batch,
+        masked_port_batch,
         key_padding_mask=attn_mask_batch,
     )
 
@@ -114,7 +116,6 @@ def eval_step(
 
     loss = 30.0 * cont_loss + 1.0 * proto_loss + 0.5 * port_loss
     return loss.item()
-
 
 
 def train_model(
@@ -158,7 +159,9 @@ def train_model(
         model.load_state_dict(initial_state_dict)
 
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=params.learning_rate, weight_decay=params.weight_decay,
+        model.parameters(),
+        lr=params.learning_rate,
+        weight_decay=params.weight_decay,
     )
     criterion = (nn.MSELoss(), nn.CrossEntropyLoss())
 
@@ -194,7 +197,9 @@ def train_model(
 
         metrics[f"epoch_{epoch_num}_train_loss"] = mean_loss
         metrics[f"epoch_{epoch_num}_eval_loss"] = mean_eval_loss
-        print(f"Epoch {epoch_num} (run epoch {epoch + 1}/{params.num_epochs}) — train: {mean_loss:.6f}  eval: {mean_eval_loss:.6f}")
+        print(
+            f"Epoch {epoch_num} (run epoch {epoch + 1}/{params.num_epochs}) — train: {mean_loss:.6f}  eval: {mean_eval_loss:.6f}"
+        )
 
         if mean_eval_loss < best_eval_loss - min_delta:
             best_eval_loss = mean_eval_loss
@@ -205,7 +210,9 @@ def train_model(
             epochs_without_improvement += 1
             if epochs_without_improvement >= patience:
                 stopped_epoch = epoch_num
-                print(f"Early stopping at epoch {stopped_epoch} (best eval: {best_eval_loss:.6f} from epoch {best_epoch})")
+                print(
+                    f"Early stopping at epoch {stopped_epoch} (best eval: {best_eval_loss:.6f} from epoch {best_epoch})"
+                )
                 break
 
     if best_state_dict is not None:

@@ -17,7 +17,10 @@ from context_based_anomalous_flow_detector.evaluation.anomaly_detection_handler 
 )
 from context_based_anomalous_flow_detector.modeling.anobert import AnoBert
 from context_based_anomalous_flow_detector.schema import CONT_PAD_VALUE, PROTO_PAD_VALUE
-from context_based_anomalous_flow_detector.training.trainer_handler import TrainerHandler, TrainingParams
+from context_based_anomalous_flow_detector.training.trainer_handler import (
+    TrainerHandler,
+    TrainingParams,
+)
 
 DATASET_ID = "synthetic"
 VERSION = "v1"
@@ -25,10 +28,14 @@ VERSION = "v1"
 
 def _tiny_model(seq_len: int = 6) -> AnoBert:
     torch.manual_seed(0)
-    return AnoBert(num_continuous_features=13, d_model=16, nhead=2, num_layers=1, max_seq_len=seq_len)
+    return AnoBert(
+        num_continuous_features=13, d_model=16, nhead=2, num_layers=1, max_seq_len=seq_len
+    )
 
 
-def _naive_leave_one_out(model, cont_b, proto_b, port_b, mask_b, params) -> dict[str, torch.Tensor]:
+def _naive_leave_one_out(
+    model, cont_b, proto_b, port_b, mask_b, params
+) -> dict[str, torch.Tensor]:
     """Reference implementation: one forward pass per position, no vectorization trick.
     Used to cross-check the fast, diagonal-indexed AnomalyDetectionHandler._score_batch."""
     b, seq_len, _ = cont_b.shape
@@ -154,7 +161,9 @@ def detector_and_dirs(tmp_path: Path):
     trainer.run(
         DATASET_ID,
         VERSION,
-        params=TrainingParams(seed=1, batch_size=4, num_epochs=2, d_model=16, n_heads=2, num_layers=1),
+        params=TrainingParams(
+            seed=1, batch_size=4, num_epochs=2, d_model=16, n_heads=2, num_layers=1
+        ),
     )
     detector = AnomalyDetectionHandler(base_path=base_path, models_root=models_root)
     return detector, models_root
@@ -162,7 +171,9 @@ def detector_and_dirs(tmp_path: Path):
 
 def test_run_writes_results_with_expected_shapes(detector_and_dirs):
     detector, models_root = detector_and_dirs
-    model_dir = detector.run(DATASET_ID, VERSION, split="test", params=AnomalyDetectionParams(batch_size=4))
+    model_dir = detector.run(
+        DATASET_ID, VERSION, split="test", params=AnomalyDetectionParams(batch_size=4)
+    )
 
     assert (model_dir / "anomaly_detection.json").exists()
     assert (model_dir / "anomaly_scores.pt").exists()
@@ -212,10 +223,14 @@ def test_metrics_omit_auc_when_only_one_class_present(tmp_path: Path):
     trainer.run(
         DATASET_ID,
         VERSION,
-        params=TrainingParams(seed=1, batch_size=4, num_epochs=1, d_model=16, n_heads=2, num_layers=1),
+        params=TrainingParams(
+            seed=1, batch_size=4, num_epochs=1, d_model=16, n_heads=2, num_layers=1
+        ),
     )
     detector = AnomalyDetectionHandler(base_path=base_path, models_root=models_root)
-    model_dir = detector.run(DATASET_ID, VERSION, split="test", params=AnomalyDetectionParams(batch_size=4))
+    model_dir = detector.run(
+        DATASET_ID, VERSION, split="test", params=AnomalyDetectionParams(batch_size=4)
+    )
 
     import json
 

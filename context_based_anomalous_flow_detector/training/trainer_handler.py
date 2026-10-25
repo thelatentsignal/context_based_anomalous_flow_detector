@@ -109,7 +109,9 @@ class TrainerHandler:
         if resume:
             checkpoint_path = target_dir / "model.pt"
             if not checkpoint_path.exists():
-                raise FileNotFoundError(f"No existing checkpoint to resume from: {checkpoint_path}")
+                raise FileNotFoundError(
+                    f"No existing checkpoint to resume from: {checkpoint_path}"
+                )
             previous_metrics = read_manifest(target_dir).get("metrics", {})
             epoch_offset = previous_metrics.get("stopped_epoch", 0)
             initial_best_eval_loss = previous_metrics.get("best_eval_loss", float("inf"))
@@ -132,14 +134,18 @@ class TrainerHandler:
         seq_len = preprocess_manifest["preprocess_params"]["seq_len"]
         # +1 for the mask/pad sentinel on top of the real quantized port classes
         # (port_top_k explicit ports + 3 IANA range buckets, see schema.port_vocab_size).
-        num_port_classes = port_vocab_size(preprocess_manifest["preprocess_params"]["port_top_k"]) + 1
+        num_port_classes = (
+            port_vocab_size(preprocess_manifest["preprocess_params"]["port_top_k"]) + 1
+        )
 
         train_cont, train_proto, train_port, train_mask = (
             splits["train"][k] for k in ("cont", "proto", "port", "mask")
         )
         dataloader = DataLoader(
             TensorDataset(train_cont, train_proto, train_port, train_mask),
-            batch_size=params.batch_size, shuffle=True, drop_last=True,
+            batch_size=params.batch_size,
+            shuffle=True,
+            drop_last=True,
         )
         if len(dataloader) == 0:
             raise ValueError("Training dataloader is empty.")
@@ -149,7 +155,8 @@ class TrainerHandler:
         )
         eval_dataloader = DataLoader(
             TensorDataset(eval_cont, eval_proto, eval_port, eval_mask),
-            batch_size=params.batch_size, shuffle=False,
+            batch_size=params.batch_size,
+            shuffle=False,
         )
 
         model, new_metrics = train_model(
@@ -168,22 +175,27 @@ class TrainerHandler:
 
         target_dir.mkdir(parents=True, exist_ok=True)
         torch.save(model.state_dict(), target_dir / "model.pt")
-        print(f"Saved weights are from epoch {metrics['best_epoch']} (best eval loss: {metrics['best_eval_loss']:.6f})")
+        print(
+            f"Saved weights are from epoch {metrics['best_epoch']} (best eval loss: {metrics['best_eval_loss']:.6f})"
+        )
 
-        write_manifest(target_dir, {
-            "dataset_id": dataset_id,
-            "version": version,
-            "created_at": now_iso(),
-            "training_params": params.to_dict(),
-            "input": {
-                "dataset_id": preprocess_manifest.get("dataset_id"),
-                "version": preprocess_manifest.get("version"),
-                "preprocessed_dir": str(preprocessed_dir),
-                "preprocess_params": preprocess_manifest.get("preprocess_params"),
+        write_manifest(
+            target_dir,
+            {
+                "dataset_id": dataset_id,
+                "version": version,
+                "created_at": now_iso(),
+                "training_params": params.to_dict(),
+                "input": {
+                    "dataset_id": preprocess_manifest.get("dataset_id"),
+                    "version": preprocess_manifest.get("version"),
+                    "preprocessed_dir": str(preprocessed_dir),
+                    "preprocess_params": preprocess_manifest.get("preprocess_params"),
+                },
+                "metrics": metrics,
+                "output_file": "model.pt",
             },
-            "metrics": metrics,
-            "output_file": "model.pt",
-        })
+        )
 
         print(f"Trained model saved to: {target_dir / 'model.pt'}")
         return target_dir

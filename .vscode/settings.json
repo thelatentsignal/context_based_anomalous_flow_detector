@@ -1,0 +1,22 @@
+{
+    "workbench.colorCustomizations": {
+        "[GitHub Dark Default]": {},
+        "menubar.selectionForeground": "#00f2ff",
+        "menu.foreground": "#ffffff",
+        "titleBar.activeForeground": "#00f2ff",
+        "titleBar.inactiveForeground": "#4b4e61",
+        "tab.activeBackground": "#ffffff",
+        "tab.activeForeground": "#470556",
+        "tab.activeBorderTop": "#00f2ff",
+        "tab.inactiveForeground": "#a9b1d6",
+        "tab.inactiveBackground": "#1a1b26",
+        "editorGroupHeader.tabsBackground": "#16161e",
+        "activityBar.background": "#31363f",
+        "activityBar.foreground": "#ffffff",
+        "sideBarSectionHeader.foreground": "#00f2ff",
+        "breadcrumb.foreground": "#ffffff",
+        "statusBar.background": "#819933",
+        "statusBar.foreground": "#15202b",
+        "sash.hoverBorder": "#819933"
+    }
+}
