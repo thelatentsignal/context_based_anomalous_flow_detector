@@ -11,18 +11,24 @@ PYTHON_INTERPRETER = python
 #################################################################################
 
 
-## Install Python dependencies
+## Install Python dependencies and register a Jupyter kernel for notebooks
 .PHONY: requirements
 requirements:
 	$(PYTHON_INTERPRETER) -m pip install -U pip
 	$(PYTHON_INTERPRETER) -m pip install -e ".[dev]"
+	$(PYTHON_INTERPRETER) -m pip install ipykernel
+	$(PYTHON_INTERPRETER) -m ipykernel install --user --name $(PROJECT_NAME) --display-name "Python ($(PROJECT_NAME))"
 
-## Delete all compiled Python files
+## Delete all compiled Python files and unregister the project Jupyter kernel
 .PHONY: clean
 clean:
 	find . -type f -name "*.py[co]" -delete
 	find . -type d -name "__pycache__" -delete
-
+	@if jupyter kernelspec list 2>/dev/null | grep -q "$(PROJECT_NAME)"; then \
+		jupyter kernelspec remove -f "$(PROJECT_NAME)"; \
+	else \
+		echo "No Jupyter kernel named $(PROJECT_NAME) found"; \
+	fi
 
 ## Lint using ruff (use `make format` to do formatting)
 .PHONY: lint
@@ -41,17 +47,14 @@ format:
 test:
 	python -m pytest tests
 
-
-## Set up Python interpreter environment
-.PHONY: create_environment
-create_environment:
+### Set up Python interpreter environment
+#.PHONY: create_environment
+#create_environment:
+#	
+#	conda create --name $(PROJECT_NAME) python=$(PYTHON_VERSION) -y
+#	
+#	@echo ">>> conda env created. Activate with:\nconda activate $(PROJECT_NAME)"
 	
-	conda create --name $(PROJECT_NAME) python=$(PYTHON_VERSION) -y
-	
-	@echo ">>> conda env created. Activate with:\nconda activate $(PROJECT_NAME)"
-	
-
-
 
 #################################################################################
 # PROJECT RULES                                                                 #
