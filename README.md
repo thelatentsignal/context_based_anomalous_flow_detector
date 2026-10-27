@@ -9,14 +9,15 @@
 2) OR use venv
    a) python3 -m venv .venv_context_based_anom
    b) source .venv_context_based_anom/bin/activate 
-3) Udpate pip:
-   python -m pip install -U pip
-4) Install project in editable mode:
-   pip install -e .
-5) create and install the ipykernel for the notebook:
-   a) python -m pip install ipykernel
-   b) python -m ipykernel install --user --name context_based_anomalous_flow_detector --display-name "Python (context_based_anomalous_flow_detector)"
-6) in the empty data folder download the nf-unswb-nb15-v3 dataset and place the file
+3) make requirements
+#3) Udpate pip:
+#   python -m pip install -U pip
+#4) Install project in editable mode:
+#   pip install -e .
+#5) create and install the ipykernel for the notebook:
+#   a) python -m pip install ipykernel
+#   b) python -m ipykernel install --user --name context_based_anomalous_flow_detector --display-name "Python (context_based_anomalous_flow_detector)"
+4) in the empty data folder download the nf-unswb-nb15-v3 dataset and place the file
 NF-UNSW-NB15-v3.csv directly into data. Rename to NF-UNSW-NB15-v3_raw.csv
 
 
