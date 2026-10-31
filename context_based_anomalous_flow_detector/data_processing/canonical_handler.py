@@ -23,9 +23,11 @@ class CanonicalHandler:
         adapter: Callable[[str, str], pd.DataFrame],
         dataset_id: str,
         version: str,
+        filename_raw_data: str
     ) -> Path:
         """Save canonical data to base_path/dataset_id/version/canonical/."""
-        data = adapter(dataset_id, version)
+        print('alles in ordnung')
+        data = adapter(dataset_id, version, filename_raw_data)
 
         if not isinstance(data, pd.DataFrame):
             raise TypeError(f"Adapter must return a pd.DataFrame, got {type(data)}")

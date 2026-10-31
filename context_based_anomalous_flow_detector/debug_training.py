@@ -1,14 +1,6 @@
 dataset_id = "unsw_nb15"
 version = "v1"
 
-from pathlib import Path
-import sys
-
-# Ensure the project root is importable
-PROJECT_ROOT = Path("..").resolve()
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
 from context_based_anomalous_flow_detector.training.trainer_handler import (
     TrainerHandler,
     TrainingParams,

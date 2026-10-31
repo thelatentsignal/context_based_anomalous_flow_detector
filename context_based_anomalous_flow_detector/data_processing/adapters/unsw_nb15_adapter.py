@@ -1,13 +1,13 @@
 import numpy as np
 import pandas as pd
 
-from context_based_anomalous_flow_detector.paths import PROJECT_ROOT
+from context_based_anomalous_flow_detector.paths import BASE_DATA_PATH
 from context_based_anomalous_flow_detector.schema import CANONICAL_COLUMNS
 
 
-def create_canonical_data(dataset_id: str, version: str) -> pd.DataFrame:
+def create_canonical_data(dataset_id: str, version: str, filename_raw_data: str) -> pd.DataFrame:
     """Read raw UNSW-NB15 data and return canonical format."""
-    raw_path = PROJECT_ROOT / "data" / dataset_id / "raw" / "NF-UNSW-NB15-v3.csv"
+    raw_path = BASE_DATA_PATH / dataset_id / "raw" / filename_raw_data
     raw_data = pd.read_csv(raw_path)
 
     cols = [
