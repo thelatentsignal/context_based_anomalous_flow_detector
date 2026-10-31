@@ -4,26 +4,37 @@
 
 PROJECT_NAME = context_based_anomalous_flow_detector
 PYTHON_VERSION = 3.13.12
-PYTHON_INTERPRETER = python
-
+PYTHON_INTERPRETER = python3
 #################################################################################
 # COMMANDS                                                                      #
 #################################################################################
 
+.PHONY: install
+install: 
+	@if command -v uv >/dev/null 2>&1; then \
+		echo "Found uv. Syncing environment..."; \
+		uv sync --extra dev; \
+		echo "Registering Jupyter kernel..."; \
+		.venv/bin/python -m ipykernel install --user --name=$(PROJECT_NAME) --display-name "Python ($(PROJECT_NAME))"; \
+	else \
+		echo "uv not found. Falling back to standard pip with pinned versions..."; \
+		python3 -m venv .venv; \
+		.venv/bin/python -m pip install --upgrade pip; \
+		.venv/bin/pip install -r requirements.txt; \
+		.venv/bin/pip install -e ".[dev]"; \
+     	.venv/bin/pip install ipykernel; \
+		.venv/bin/python -m ipykernel install --user --name=$(PROJECT_NAME) --display-name "Python ($(PROJECT_NAME))"; \
+	fi
 
-## Install Python dependencies and register a Jupyter kernel for notebooks
-.PHONY: requirements
-requirements:
-	$(PYTHON_INTERPRETER) -m pip install -U pip
-	$(PYTHON_INTERPRETER) -m pip install -e ".[dev]"
-	$(PYTHON_INTERPRETER) -m pip install ipykernel
-	$(PYTHON_INTERPRETER) -m ipykernel install --user --name $(PROJECT_NAME) --display-name "Python ($(PROJECT_NAME))"
 
-## Delete all compiled Python files and unregister the project Jupyter kernel
 .PHONY: clean
 clean:
-	find . -type f -name "*.py[co]" -delete
-	find . -type d -name "__pycache__" -delete
+	@echo "Cleaning up compiled Python files and build artifacts..."
+	@find . -type f -name "*.py[co]" -delete
+	@find . -type d -name "__pycache__" -delete
+	@rm -rf .venv
+	@rm -rf build/ dist/ *.egg-info/ .eggs/
+	@echo "Unregistering Jupyter kernel..."
 	@if jupyter kernelspec list 2>/dev/null | grep -q "$(PROJECT_NAME)"; then \
 		jupyter kernelspec remove -f "$(PROJECT_NAME)"; \
 	else \
@@ -47,14 +58,7 @@ format:
 test:
 	python -m pytest tests
 
-### Set up Python interpreter environment
-#.PHONY: create_environment
-#create_environment:
-#	
-#	conda create --name $(PROJECT_NAME) python=$(PYTHON_VERSION) -y
-#	
-#	@echo ">>> conda env created. Activate with:\nconda activate $(PROJECT_NAME)"
-	
+
 
 #################################################################################
 # PROJECT RULES                                                                 #

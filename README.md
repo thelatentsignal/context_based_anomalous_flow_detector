@@ -3,13 +3,7 @@
 2. **Clone the repository:**
 
 1) clone repos
-2) create new conda env and activate it with python >=3.12:
-   a) 'conda create -n context_based_anomalous_flow_detector python=3.12'
-   b) conda activate context_based_anomalous_flow_detector
-2) OR use venv
-   a) python3 -m venv .venv_context_based_anom
-   b) source .venv_context_based_anom/bin/activate 
-3) make requirements
+2) make install
 4) in the empty data folder download the nf-unswb-nb15-v3 dataset and place the file
 NF-UNSW-NB15-v3.csv directly into data. Rename to NF-UNSW-NB15-v3_raw.csv
 
@@ -21,6 +15,15 @@ NF-UNSW-NB15-v3.csv directly into data. Rename to NF-UNSW-NB15-v3_raw.csv
 </a>
 
 Test if batches of anomalouse flows can be detected using a Bert-style approach.
+
+This installs the project in editable mode. 
+It will write data to the data folder and models
+to the model folder.
+If you ever want to change this default you can
+create a .env file under the project root with:
+# .env file
+CBAFD_DATA_DIR=/your/pathh/
+CBAFD_MODELS_DIR=/wherever/you/want
 
 ## Project Organization
 

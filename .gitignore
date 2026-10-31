@@ -1,5 +1,8 @@
+ai_prompts
 # Data
 
+# ignore config
+.env
 
 # Ignore generated data, keep raw data if desired
 data/**/processed/
@@ -81,7 +84,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
-cover/
+coveqr/
 
 # Translations
 *.mo

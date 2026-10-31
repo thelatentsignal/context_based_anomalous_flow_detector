@@ -29,6 +29,7 @@ dependencies = [
  "matplotlib",
  "loguru",
  "pyarrow",
+ "ipykernel"
 ]
 
 [project.optional-dependencies]
